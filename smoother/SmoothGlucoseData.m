@@ -1,7 +1,7 @@
-function [y_smoothed,y_smoothed_sd, varargout]=SmoothGlucoseData(t,y,t_i,outlierRemoval,plotResult)
+function [y_smoothed,y_smoothed_sd, varargout]=SmoothGlucoseData(t,y,t_i,outlierRemoval,plotResult,startDateTime)
 % SMOOTHGLUCOSEDATA Creates a smoothed glucose curve with variance estimates
 % Usage:
-% [y_smoothed,y_smoothed_sd]=SmoothGlucoseData(t,y,t_i,plot)
+% [y_smoothed,y_smoothed_sd]=SmoothGlucoseData(t,y,t_i,outlierRemoval,plotResult,expStartDateTime)
 %   Generates a smoothed estimate from the input data t (time in minutes) 
 %   and y (glucose values) with at the times given by t_i (minutes, should 
 %   have a uniform sampling intervals less than those in t). 
@@ -16,7 +16,11 @@ function [y_smoothed,y_smoothed_sd, varargout]=SmoothGlucoseData(t,y,t_i,outlier
 %   If outlierRemoval is any other value, outlier removal is not done. 
 %   
 % If plotResult==1, a plot will be produced showing the result of the
-%   smoothing
+%   smoothing.
+%
+% startDateTime is a datetime defining the start of the experiment.
+% Allows for plotting the experiment with the datetime format.
+% 
 % If the four-output variant is used:
 % [y_smoothed,y_smoothed_sd,y_filtered, y_filtered_sd]=SmoothGlucoseData(t,y,t_i,plot)
 % ,the data from the forward pass is
@@ -37,29 +41,31 @@ elseif outlierRemoval==2
 elseif outlierRemoval==3
     outlierStds=2;    
 end
-delta_t = (max(t_i) - min(t_i))/(length(t_i)-1);%Time step of interpolated signal (minutes)
+delta_t = (max(t_i) - min(t_i))/(length(t_i)-1);    % Time step of interpolated signal (minutes)
 if delta_t>0.5
     error('delta_t larger than half a minute, not recommended')
 end
 a=-0.05;
-F =[0 1;0 a];%System matrix (continuous)- simple 2.order system where the rate of change of glucose dies out
-Q=[0 0;0 0.05*delta_t];%Process noise covariance matrix
-H=[1 0];%Measurement matrix
-%According to ISO15197
-Rlow = 0.11;%Measurement variance - (mmol/L)^2
-isoLimit = 5.6;%mmol/L
+F =[0 1;0 a];               % System matrix (continuous)
+                            % - simple 2.order system where the rate of 
+                            % change of glucose dies out.
+Q=[0 0;0 0.05*delta_t];     % Process noise covariance matrix.
+H=[1 0];                    % Measurement matrix.
+%According to ISO15197:
+Rlow = 0.11;                % Measurement variance [(mmol/L)^2]
+isoLimit = 5.6;             % [mmol/L]
 RhighFact = 0.0064;
 
 %%% Discretization
-Phi=expm(F*delta_t);%Discrete state transition matrix
+Phi=expm(F*delta_t);        %Discrete state transition matrix
 
 %%% Storage
-x_hat_f = zeros(2,length(t_i));%A priori state vector storage, forward pass
-x_bar_f = zeros(2,length(t_i));%A posteriori state vector storage, forward pass
-P_hat_f = zeros(2,2,length(t_i));%A priori covariance matrix storage, forward pass
-P_bar_f = zeros(2,2,length(t_i));%A posteriori covariance matrix storage, forward pass
-x_smoothed = zeros(2,length(t_i));%State vector storage, backward pass
-P_smoothed = zeros(2,2,length(t_i));%Covariance matrix storage, backward pass
+x_hat_f = zeros(2,length(t_i));         % A priori state vector storage, forward pass
+x_bar_f = zeros(2,length(t_i));         % A posteriori state vector storage, forward pass
+P_hat_f = zeros(2,2,length(t_i));       % A priori covariance matrix storage, forward pass
+P_bar_f = zeros(2,2,length(t_i));       % A posteriori covariance matrix storage, forward pass
+x_smoothed = zeros(2,length(t_i));      % State vector storage, backward pass
+P_smoothed = zeros(2,2,length(t_i));    % Covariance matrix storage, backward pass
 
 
 %%% Initialization
@@ -85,7 +91,8 @@ for k = 1:length(t_i)
     
     measUpdateDone=0;
     %MU - Measurement Update only when we have a measurement
-    while length(t)>=l && t_i(k)>=t(l)%Interpolated time has passed one of the measurement times
+    while length(t)>=l && t_i(k)>=t(l)  % Interpolated time has passed one 
+                                        % of the measurement times
         if measUpdateDone==1
             %More than one measurement at the current time
             xBar = xHat;
@@ -104,7 +111,7 @@ for k = 1:length(t_i)
             %Check the innovation
             if(abs(dz)>outlierStds*sqrt(Pz))
                 isOutlier=1;
-                disp(['Flagged measurement as outlier: (t,y)=' num2str([t(l) y(l)]) ])
+                disp(['Flagged measurement as outlier: t = ' num2str(t(l)) ' [min], y = ' num2str(y(l)) ' [mmol/L].'])
             else
                 isOutlier=0;
             end
@@ -117,14 +124,14 @@ for k = 1:length(t_i)
         end
         l=l+1;
     end
-    if measUpdateDone==0%No measurement was available at this time 
+    if measUpdateDone==0    % No measurement was available at this time 
         xHat=xBar;
         PHat=PBar;
     end
     %Store
     x_hat_f(:,k)=xHat;
     P_hat_f(:,:,k)=PHat;
-end %for k
+end % for k
 
 %%% Rauch-Tung-Striebel backward pass
 x_smoothed(:,k)=xHat;
@@ -154,28 +161,33 @@ end
 if plotResult==1
     figure()
     y_error = zeros(size(y));
-    for i = 1:length(y)%Make error bars (assumes fingerprick measurement errors according to ISO15197)
+    for i = 1:length(y) % Make error bars (assumes fingerprick measurement 
+                        % errors according to ISO15197)
         if y(i)>5.6
             y_error(i) = 0.2*y(i);
         else
             y_error(i) = 0.83;
         end
     end
-    h1 = errorbar(t,y,y_error,'r.','MarkerSize',10,'LineWidth',1);%Using 2 sigma
+    % TODO: Sjekke om nargin>5 og dermed om startDateTime skal brukes,
+    % eller om man skal plotte på "gammelmåten".
+    t_plot = startDateTime + minutes(t); % Convert to datetime for plotting
+    h1 = errorbar(datenum(t_plot),y,y_error,'r.','MarkerSize',10,'LineWidth',1); % Using 2 sigma
     hold on
-    h2 = plot(t_i,y_smoothed,'b','LineWidth',2);
-    h3 = plot(t_i,y_smoothed+2*y_smoothed_sd,'b--');
-    plot(t_i,y_smoothed-2*y_smoothed_sd,'b--')
+    t_i_plot = startDateTime + minutes(t_i); % Convert to datetime for plotting
+    h2 = plot(t_i_plot,y_smoothed,'b','LineWidth',2);
+    h3 = plot(t_i_plot,y_smoothed+2*y_smoothed_sd,'b--');
+    plot(t_i_plot,y_smoothed-2*y_smoothed_sd,'b--')
 
     xlabel('Time [min]')
     ylabel('Glucose [mmol/L]')
     if nargout == 4
-        h4= plot(t_i,y_filtered,'g','LineWidth',2);
-        h5 = plot(t_i,y_filtered+2*y_filtered_sd,'g--');
-        plot(t_i,y_filtered-2*y_filtered_sd,'g--')
-        legend([h1 h2 h3 h4 h5],{'Fingerprick measurements w/error','Smoothed estimate','\pm2 SD of smoothed estimate', 'Filtered estimate', '\pm2 SD of filtered estimate' })
+        h4= plot(t_i_plot,y_filtered,'g','LineWidth',2);
+        h5 = plot(t_i_plot,y_filtered+2*y_filtered_sd,'g--');
+        plot(t_i_plot,y_filtered-2*y_filtered_sd,'g--')
+        legend([h1 h2 h3 h4 h5],{'Unfiltered glucose data','Smoothed estimate','\pm2 SD of smoothed estimate', 'Filtered estimate', '\pm2 SD of filtered estimate' })
     else
-        legend([h1 h2 h3],{'Fingerprick measurements w/error','Smoothed estimate','\pm2 SD of smoothed estimate' })
+        legend([h1 h2 h3],{'Unfiltered glucose data','Smoothed estimate','\pm2 SD of smoothed estimate' })
     end
     hold off
 end
