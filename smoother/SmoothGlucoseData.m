@@ -1,4 +1,4 @@
-function [y_smoothed,y_smoothed_sd, varargout]=SmoothGlucoseData(t,y,t_i,outlierRemoval,plotResult,startDateTime)
+function [y_smoothed,y_smoothed_sd, varargout]=SmoothGlucoseData(t,y,y_error,t_i,outlierRemoval,plotResult,startDateTime)
 % SMOOTHGLUCOSEDATA Creates a smoothed glucose curve with variance estimates
 % Usage:
 % [y_smoothed,y_smoothed_sd]=SmoothGlucoseData(t,y,t_i,outlierRemoval,plotResult,expStartDateTime)
@@ -13,8 +13,10 @@ function [y_smoothed,y_smoothed_sd, varargout]=SmoothGlucoseData(t,y,t_i,outlier
 %   If outlierRemoval==1, a limit of 5 std dev is used (conservative) 
 %   If outlierRemoval==2, a limit of 3 std devs (medium)
 %   If outlierRemoval==3, a limit of 2 std devs (aggressive)
-%   If outlierRemoval is any other value, outlier removal is not done. 
-%   
+%   If outlierRemoval==4, a limit of 1 std devs (very aggressive)
+%   If outlierRemoval is any other value, outlier removal is not done before smoothing). 
+   
+
 % If plotResult==1, a plot will be produced showing the result of the
 %   smoothing.
 %
@@ -23,8 +25,7 @@ function [y_smoothed,y_smoothed_sd, varargout]=SmoothGlucoseData(t,y,t_i,outlier
 % 
 % If the four-output variant is used:
 % [y_smoothed,y_smoothed_sd,y_filtered, y_filtered_sd]=SmoothGlucoseData(t,y,t_i,plot)
-% ,the data from the forward pass is
-% also returned (and plotted if specified)
+% ,the data from the forward pass is also returned (and plotted if specified)
 
 %%TODO time handling should be better. Should handle datetime arrays
 
@@ -39,11 +40,16 @@ if outlierRemoval==1
 elseif outlierRemoval==2
     outlierStds=3;
 elseif outlierRemoval==3
-    outlierStds=2;    
+    outlierStds=2;
+elseif outlierRemoval==4
+    outlierStds=1; 
 end
-delta_t = (max(t_i) - min(t_i))/(length(t_i)-1);    % Time step of interpolated signal (minutes)
+
+delta_t = min(diff(t_i));    % Time step of interpolated signal (minutes)
 if delta_t>0.5
-    error('delta_t larger than half a minute, not recommended')
+    delta_t = 0.5;%Half a minute is max stepping recommended
+elseif delta_t<1/60;
+    delta_t = 1/60%Stepping more often than every second is not recommended
 end
 a=-0.05;
 F =[0 1;0 a];               % System matrix (continuous)
@@ -51,10 +57,23 @@ F =[0 1;0 a];               % System matrix (continuous)
                             % change of glucose dies out.
 Q=[0 0;0 0.05*delta_t];     % Process noise covariance matrix.
 H=[1 0];                    % Measurement matrix.
-%According to ISO15197:
-Rlow = 0.11;                % Measurement variance [(mmol/L)^2]
-isoLimit = 5.6;             % [mmol/L]
-RhighFact = 0.0064;
+
+error2var = @(error) (error/3)^2; %Assumes normal distribution, and  error is given as a 99% confidence interval
+
+if length(y_error)==length(y)%Assume user supplied error estimates
+    %do nothing, y_error is already set
+elseif length(y_error)==0%Empty array supplied, assume error follows ISO 15971, set it based on the measured values
+    y_error = zeros(size(y));
+    for i = 1:length(y) % Make error bars (assumes fingerprick measurement                 % errors according to ISO15197)
+        if y(i)>5.6
+            y_error(i) = 0.2*y(i);
+        else
+            y_error(i) = 0.83;
+        end
+    end
+elseif isstr(y_error) && strcmp(y_error, 'Adaptive')==1
+    error('Adaptive filtering not implemented yet')
+end
 
 %%% Discretization
 Phi=expm(F*delta_t);        %Discrete state transition matrix
@@ -99,11 +118,7 @@ for k = 1:length(t_i)
             PBar = xBar;
         end
         dz = y(l)-H*xBar;
-        if(y(l)>isoLimit)%Set measurement variance for this measurement
-            R=RhighFact*y(l)^2;
-        else
-            R=Rlow;
-        end
+        R = error2var(y_error(l));
         Pz = (H*PBar*H'+R);
         if isnan(outlierStds)
             isOutlier = 0;
@@ -160,21 +175,19 @@ end
 
 if plotResult==1
     figure()
-    y_error = zeros(size(y));
-    for i = 1:length(y) % Make error bars (assumes fingerprick measurement 
-                        % errors according to ISO15197)
-        if y(i)>5.6
-            y_error(i) = 0.2*y(i);
-        else
-            y_error(i) = 0.83;
-        end
+    
+    if  nargin>6
+        t_plot = startDateTime + minutes(t); % Convert to datetime for plotting
+        t_i_plot = startDateTime + minutes(t_i); % Convert to datetime for plotting
+    
+    else
+        t_plot = t;
+        t_i_plot = t_i;
     end
-    % TODO: Sjekke om nargin>5 og dermed om startDateTime skal brukes,
-    % eller om man skal plotte på "gammelmåten".
-    t_plot = startDateTime + minutes(t); % Convert to datetime for plotting
-    h1 = errorbar(datenum(t_plot),y,y_error,'r.','MarkerSize',10,'LineWidth',1); % Using 2 sigma
+    %h1 = errorbar(t_plot,y,y_error,'r.','MarkerSize',10,'LineWidth',1); % Using 2 sigma
+    h1 = plot(t_plot,y,'r.','MarkerSize',10); % Using 2 sigma
+    
     hold on
-    t_i_plot = startDateTime + minutes(t_i); % Convert to datetime for plotting
     h2 = plot(t_i_plot,y_smoothed,'b','LineWidth',2);
     h3 = plot(t_i_plot,y_smoothed+2*y_smoothed_sd,'b--');
     plot(t_i_plot,y_smoothed-2*y_smoothed_sd,'b--')
