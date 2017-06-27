@@ -15,8 +15,8 @@ function [y_smoothed,y_smoothed_sd, varargout]=SmoothGlucoseData(t,y,y_error,t_i
 %   If outlierRemoval==3, a limit of 2 std devs (aggressive)
 %   If outlierRemoval==4, a limit of 1 std devs (very aggressive)
 %   If outlierRemoval is any other value, outlier removal is not done before smoothing). 
-   
-
+%   
+%
 % If plotResult==1, a plot will be produced showing the result of the
 %   smoothing.
 %
@@ -28,12 +28,16 @@ function [y_smoothed,y_smoothed_sd, varargout]=SmoothGlucoseData(t,y,y_error,t_i
 % ,the data from the forward pass is also returned (and plotted if specified)
 
 %%TODO time handling should be better. Should handle datetime arrays
+%%TODO make key/value vararg structure
+%%TODO all outputs into one struct
 
 %%% Tunable parameters
-% The system used by the Kalman smoother is very simple and only describes a state that 
-% has a rate of change that decays 
+% The system equations used by the Kalman smoother is very simple and 
+% only describes a state that has a rate of change that decays 
 % $$ \dot{x_1} = x_2 $$
 % $$ \dot{x_2} = -ax_2 $$
+
+
 outlierStds=NaN;
 if outlierRemoval==1
     outlierStds=5;
@@ -47,18 +51,21 @@ end
 
 delta_t = min(diff(t_i));    % Time step of interpolated signal (minutes)
 if delta_t>0.5
-    delta_t = 0.5;%Half a minute is max stepping recommended
+    delta_t = 0.5;%Half a minute is max step size recommended
 elseif delta_t<1/60;
     delta_t = 1/60%Stepping more often than every second is not recommended
 end
+
 a=-0.05;
 F =[0 1;0 a];               % System matrix (continuous)
                             % - simple 2.order system where the rate of 
                             % change of glucose dies out.
+
 Q=[0 0;0 0.05*delta_t];     % Process noise covariance matrix.
 H=[1 0];                    % Measurement matrix.
 
-error2var = @(error) (error/3)^2; %Assumes normal distribution, and  error is given as a 99% confidence interval
+sdsInConfInterval = 2.5; %2 for 95% CI, 2.5 for 99% CI
+error2var = @(error) (error/2.5)^2; %Assumes normal distribution, and  error is given as a 99% confidence interval
 
 if length(y_error)==length(y)%Assume user supplied error estimates
     %do nothing, y_error is already set
@@ -111,11 +118,12 @@ for k = 1:length(t_i)
     measUpdateDone=0;
     %MU - Measurement Update only when we have a measurement
     while length(t)>=l && t_i(k)>=t(l)  % Interpolated time has passed one 
-                                        % of the measurement times
+                                        % of the measurement times, process
+                                        % all measurements that has occurred
         if measUpdateDone==1
             %More than one measurement at the current time
             xBar = xHat;
-            PBar = xBar;
+            PBar = PHat;
         end
         dz = y(l)-H*xBar;
         R = error2var(y_error(l));
@@ -132,7 +140,20 @@ for k = 1:length(t_i)
             end
         end
         if isOutlier==0
-            K=PBar*H'/Pz;
+            try
+                K=PBar*H'/Pz;
+            catch ME
+                disp(ME)
+                t(l)
+                y(l)
+                dz
+                PBar
+                H
+                Pz
+                R
+                (H*PBar*H'+R)
+                error('Argh')
+            end
             xHat = xBar + K*dz;
             PHat = (eye(size(PBar))-K*H)*PBar;
             measUpdateDone=1;
@@ -163,7 +184,7 @@ for k = 1:length(t_i)
 end
 
 if nargout==4
-    disp('Adding filtered (intermediate result before smoothing step)')
+    %disp('Adding filtered (intermediate result before smoothing step)')
     y_filtered = x_hat_f(1,:);
     y_filtered_sd = zeros(size(y_filtered));
     for k = 1:length(t_i)
@@ -189,15 +210,15 @@ if plotResult==1
     
     hold on
     h2 = plot(t_i_plot,y_smoothed,'b','LineWidth',2);
-    h3 = plot(t_i_plot,y_smoothed+2*y_smoothed_sd,'b--');
-    plot(t_i_plot,y_smoothed-2*y_smoothed_sd,'b--')
+    h3 = plot(t_i_plot,y_smoothed+2.5*y_smoothed_sd,'b--');
+    plot(t_i_plot,y_smoothed-2.5*y_smoothed_sd,'b--')
 
     xlabel('Time [min]')
     ylabel('Glucose [mmol/L]')
     if nargout == 4
         h4= plot(t_i_plot,y_filtered,'g','LineWidth',2);
-        h5 = plot(t_i_plot,y_filtered+2*y_filtered_sd,'g--');
-        plot(t_i_plot,y_filtered-2*y_filtered_sd,'g--')
+        h5 = plot(t_i_plot,y_filtered+2.5*y_filtered_sd,'g--');
+        plot(t_i_plot,y_filtered-2.5*y_filtered_sd,'g--')
         legend([h1 h2 h3 h4 h5],{'Unfiltered glucose data','Smoothed estimate','\pm2 SD of smoothed estimate', 'Filtered estimate', '\pm2 SD of filtered estimate' })
     else
         legend([h1 h2 h3],{'Unfiltered glucose data','Smoothed estimate','\pm2 SD of smoothed estimate' })
