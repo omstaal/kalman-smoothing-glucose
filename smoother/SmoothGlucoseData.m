@@ -20,11 +20,12 @@ function [y_smoothed,y_smoothed_sd, varargout]=SmoothGlucoseData(t,y,y_error,t_i
 % If plotResult==1, a plot will be produced showing the result of the
 %   smoothing.
 %
-% startDateTime is a datetime defining the start of the experiment.
+% startDateTime (optional argument) is a datetime defining the start of the experiment.
 % Allows for plotting the experiment with the datetime format.
+% If not defined, the plot will start at 0 [min].
 % 
 % If the four-output variant is used:
-% [y_smoothed,y_smoothed_sd,y_filtered, y_filtered_sd]=SmoothGlucoseData(t,y,t_i,plot)
+% [y_smoothed,y_smoothed_sd,y_filtered, y_filtered_sd]=SmoothGlucoseData(t,y,y_error,t_i,plot)
 % ,the data from the forward pass is also returned (and plotted if specified)
 
 %%TODO time handling should be better. Should handle datetime arrays
@@ -52,8 +53,8 @@ end
 delta_t = min(diff(t_i));    % Time step of interpolated signal (minutes)
 if delta_t>0.5
     delta_t = 0.5;%Half a minute is max step size recommended
-elseif delta_t<1/60;
-    delta_t = 1/60%Stepping more often than every second is not recommended
+elseif delta_t<1/60
+    delta_t = 1/60;	%Stepping more often than every second is not recommended
 end
 
 a=-0.05;
@@ -64,26 +65,29 @@ F =[0 1;0 a];               % System matrix (continuous)
 Q=[0 0;0 0.05*delta_t];     % Process noise covariance matrix.
 H=[1 0];                    % Measurement matrix.
 
-sdsInConfInterval = 2.5; %2 for 95% CI, 2.5 for 99% CI
-error2var = @(error) (error/2.5)^2; %Assumes normal distribution, and  error is given as a 99% confidence interval
 
-if length(y_error)==length(y)%Assume user supplied error estimates
-    %do nothing, y_error is already set
-elseif length(y_error)==0%Empty array supplied, assume error follows ISO 15971, set it based on the measured values
+sdsInConfInterval = 2.5; %2 for 95% CI, 2.5 for 99% CI
+error2var = @(error) (error/sdsInConfInterval)^2; %Assumes normal distribution, and  error is given as a 99% confidence interval
+
+if length(y_error)==length(y)   % Assume user supplied error estimates
+                                % -> do nothing, y_error is already set
+elseif isempty(y_error)         % Empty array supplied, assume error follows 
+                                % ISO 15971, set it based on the measured values
     y_error = zeros(size(y));
-    for i = 1:length(y) % Make error bars (assumes fingerprick measurement                 % errors according to ISO15197)
+    for i = 1:length(y) % Make error bars (assumes fingerprick measurement
+                        % errors according to ISO15197)
         if y(i)>5.6
             y_error(i) = 0.2*y(i);
         else
             y_error(i) = 0.83;
         end
     end
-elseif isstr(y_error) && strcmp(y_error, 'Adaptive')==1
+elseif ischar(y_error) && strcmp(y_error, 'Adaptive')==1
     error('Adaptive filtering not implemented yet')
 end
 
 %%% Discretization
-Phi=expm(F*delta_t);        %Discrete state transition matrix
+Phi=expm(F*delta_t);                    % Discrete state transition matrix
 
 %%% Storage
 x_hat_f = zeros(2,length(t_i));         % A priori state vector storage, forward pass
@@ -121,7 +125,7 @@ for k = 1:length(t_i)
                                         % of the measurement times, process
                                         % all measurements that has occurred
         if measUpdateDone==1
-            %More than one measurement at the current time
+            % More than one measurement at the current time
             xBar = xHat;
             PBar = PHat;
         end
@@ -131,7 +135,7 @@ for k = 1:length(t_i)
         if isnan(outlierStds)
             isOutlier = 0;
         else
-            %Check the innovation
+            % Check the innovation
             if(abs(dz)>outlierStds*sqrt(Pz))
                 isOutlier=1;
                 disp(['Flagged measurement as outlier: t = ' num2str(t(l)) ' [min], y = ' num2str(y(l)) ' [mmol/L].'])
@@ -140,20 +144,8 @@ for k = 1:length(t_i)
             end
         end
         if isOutlier==0
-            try
-                K=PBar*H'/Pz;
-            catch ME
-                disp(ME)
-                t(l)
-                y(l)
-                dz
-                PBar
-                H
-                Pz
-                R
-                (H*PBar*H'+R)
-                error('Argh')
-            end
+            %Measurement update
+            K=PBar*H'/Pz;
             xHat = xBar + K*dz;
             PHat = (eye(size(PBar))-K*H)*PBar;
             measUpdateDone=1;
@@ -164,7 +156,7 @@ for k = 1:length(t_i)
         xHat=xBar;
         PHat=PBar;
     end
-    %Store
+    % Store
     x_hat_f(:,k)=xHat;
     P_hat_f(:,:,k)=PHat;
 end % for k
@@ -210,19 +202,20 @@ if plotResult==1
     
     hold on
     h2 = plot(t_i_plot,y_smoothed,'b','LineWidth',2);
-    h3 = plot(t_i_plot,y_smoothed+2.5*y_smoothed_sd,'b--');
-    plot(t_i_plot,y_smoothed-2.5*y_smoothed_sd,'b--')
+    h3 = plot(t_i_plot,y_smoothed+sdsInConfInterval*y_smoothed_sd,'b--');
+    plot(t_i_plot,y_smoothed-sdsInConfInterval*y_smoothed_sd,'b--')
 
-    xlabel('Time [min]')
-    ylabel('Glucose [mmol/L]')
+    xlabel('Time [min]','FontWeight','bold','FontSize',12);
+    ylabel('Glucose [mmol/L]','FontWeight','bold','FontSize',12);
     if nargout == 4
         h4= plot(t_i_plot,y_filtered,'g','LineWidth',2);
-        h5 = plot(t_i_plot,y_filtered+2.5*y_filtered_sd,'g--');
-        plot(t_i_plot,y_filtered-2.5*y_filtered_sd,'g--')
+        h5 = plot(t_i_plot,y_filtered+sdsInConfInterval*y_filtered_sd,'g--');
+        plot(t_i_plot,y_filtered-sdsInConfInterval*y_filtered_sd,'g--')
         legend([h1 h2 h3 h4 h5],{'Unfiltered glucose data','Smoothed estimate','\pm2 SD of smoothed estimate', 'Filtered estimate', '\pm2 SD of filtered estimate' })
     else
         legend([h1 h2 h3],{'Unfiltered glucose data','Smoothed estimate','\pm2 SD of smoothed estimate' })
     end
+    title('Kalman smoothing','FontWeight','bold','FontSize',14)
     hold off
 end
 
