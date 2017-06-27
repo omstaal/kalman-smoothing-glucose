@@ -3,10 +3,15 @@ function [y_smoothed,y_smoothed_sd, varargout]=SmoothGlucoseData(t,y,y_error,t_i
 % Usage:
 % [y_smoothed,y_smoothed_sd]=SmoothGlucoseData(t,y,t_i,outlierRemoval,plotResult,expStartDateTime)
 %   Generates a smoothed estimate from the input data t (time in minutes) 
-%   and y (glucose values) with at the times given by t_i (minutes, should 
+%   and y (glucose values) with error given by y_error, at the times given by t_i (minutes, should 
 %   have a uniform sampling intervals less than those in t). 
 %   mean y_smoothed and standard deviation y_smoothed_sd
-%
+%   
+%   y_error can be set to:
+%    an empty array, to signify that limits from ISO 15971 should be used
+%    a user supplied array of same length as y, that has the errors for
+%    individual measurements
+%   
 %   The outlierRemoval parameter controls outlier removal:
 %   Measurements are considered to be outliers if the innovation is outside
 %   X std devs of the innovation variance in the forward pass Kalmanfilter
