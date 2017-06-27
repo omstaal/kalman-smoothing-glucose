@@ -20,10 +20,11 @@ function [y_smoothed,y_smoothed_sd, varargout]=SmoothGlucoseData(t,y,y_error,t_i
 % If plotResult==1, a plot will be produced showing the result of the
 %   smoothing.
 %
-% startDateTime is a datetime defining the start of the experiment.
+% startDateTime (optional argument) is a datetime defining the start of the experiment.
 % Allows for plotting the experiment with the datetime format.
+% If not defined, the plot will start at 0 [min].
 % 
-% If the five-output variant is used:
+% If the four-output variant is used:
 % [y_smoothed,y_smoothed_sd,y_filtered, y_filtered_sd]=SmoothGlucoseData(t,y,y_error,t_i,plot)
 % ,the data from the forward pass is also returned (and plotted if specified)
 
@@ -196,7 +197,7 @@ if plotResult==1
 
     xlabel('Time [min]','FontWeight','bold','FontSize',12);
     ylabel('Glucose [mmol/L]','FontWeight','bold','FontSize',12);
-    if nargout == 5
+    if nargout == 4
         h4 = plot(t_i_plot,y_filtered,'g','LineWidth',2);
         h5 = plot(t_i_plot,y_filtered+2*y_filtered_sd,'g--');
         plot(t_i_plot,y_filtered-2*y_filtered_sd,'g--')
