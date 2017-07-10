@@ -1,4 +1,4 @@
-function [y_smoothed,y_smoothed_sd, varargout]=SmoothGlucoseData(t,y,y_error,t_i,outlierRemoval,plotResult,startDateTime)
+function output=SmoothGlucoseData(t,y,y_error,t_i,outlierRemoval,plotResult,startDateTime)
 % SMOOTHGLUCOSEDATA Creates a smoothed glucose curve with variance estimates
 % Usage:
 % [y_smoothed,y_smoothed_sd]=SmoothGlucoseData(t,y,t_i,outlierRemoval,plotResult,expStartDateTime)
@@ -33,15 +33,20 @@ function [y_smoothed,y_smoothed_sd, varargout]=SmoothGlucoseData(t,y,y_error,t_i
 % [y_smoothed,y_smoothed_sd,y_filtered, y_filtered_sd]=SmoothGlucoseData(t,y,y_error,t_i,plot)
 % ,the data from the forward pass is also returned (and plotted if specified)
 
-%%TODO time handling should be better. Should handle datetime arrays
-%%TODO make key/value vararg structure
-%%TODO all outputs into one struct
+%% TODO handle datetime arrays
+%% TODO handle timeseries
+%% TODO make key/value input vararg structure
+%% TODO autodetect unit of input data (if majority of data is less than 30, set unit  = mmol/L, otherwise mg/dL
 
 %%% Tunable parameters
 % The system equations used by the Kalman smoother is very simple and 
 % only describes a state that has a rate of change that decays 
 % $$ \dot{x_1} = x_2 $$
 % $$ \dot{x_2} = -ax_2 $$
+
+if mod(nargin,2)~=0
+    error(['key/value arguments are odd:' num2str(nargin)])
+end
 
 
 outlierStds=NaN;
@@ -62,12 +67,12 @@ elseif delta_t<1/60
     delta_t = 1/60;	%Stepping more often than every second is not recommended
 end
 
-a=-0.05;
+a=-0.025;
 F =[0 1;0 a];               % System matrix (continuous)
                             % - simple 2.order system where the rate of 
                             % change of glucose dies out.
 
-Q=[0 0;0 0.05*delta_t];     % Process noise covariance matrix.
+Q=[0 0;0 0.01*delta_t];     % Process noise covariance matrix.
 H=[1 0];                    % Measurement matrix.
 
 
@@ -174,21 +179,18 @@ for k = length(t_i)-1:-1:1
     x_smoothed(:,k)=x_hat_f(:,k)+C*(x_smoothed(:,k+1)-x_bar_f(:,k+1));
     P_smoothed(:,:,k)=P_hat_f(:,:,k)+C*(P_smoothed(:,:,k+1)-P_bar_f(:,:,k+1))*C';  
 end
-y_smoothed = x_smoothed(1,:);
-y_smoothed_sd = zeros(size(y_smoothed));
+
+%Generate output struct
+output.y_smoothed = x_smoothed(1,:);
+output.y_smoothed_sd = zeros(size(output.y_smoothed));
 for k = 1:length(t_i)
-    y_smoothed_sd(k) = sqrt(P_smoothed(1,1,k));
+    output.y_smoothed_sd(k) = sqrt(P_smoothed(1,1,k));
 end
 
-if nargout==4
-    %disp('Adding filtered (intermediate result before smoothing step)')
-    y_filtered = x_hat_f(1,:);
-    y_filtered_sd = zeros(size(y_filtered));
-    for k = 1:length(t_i)
-        y_filtered_sd(k) = sqrt(P_hat_f(1,1,k));
-    end
-    varargout{1} = y_filtered;
-    varargout{2} = y_filtered_sd;
+output.y_filtered = x_hat_f(1,:);
+output.y_filtered_sd = zeros(size(output.y_filtered));
+for k = 1:length(t_i)
+    output.y_filtered_sd(k) = sqrt(P_hat_f(1,1,k));
 end
 
 if plotResult==1
@@ -224,6 +226,7 @@ if plotResult==1
     hold off
 end
 
+disp(output)
 end%function
 
 %%% R value rationale: 
