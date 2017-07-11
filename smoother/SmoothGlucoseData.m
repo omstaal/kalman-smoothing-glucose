@@ -1,16 +1,17 @@
-function output=SmoothGlucoseData(t,y,t_i,varargin)
+function output=SmoothGlucoseData(t_in,y_in,varargin)
 % SMOOTHGLUCOSEDATA Creates a smoothed glucose curve with variance
 %                   estimates from input glucose readings
 % Usage:
 % output=SmoothGlucoseData(t,y,t_i,...)
-%   Generates a smoothed estimate from the input data t (time in minutes) 
-%   and y (glucose values) with error given by y_error, at the times given by t_i (minutes, should 
-%   have a uniform sampling intervals less than those in t). 
+%   Generates a smoothed estimate from the input data t (array of datetime, 
+%   or time in minutes) and y (glucose values)
+%
 %   output is a struct with fields:
 %       y_smoothed : smoother estimates, mean 
 %       y_smoothed_sd : smoother estimates, standard deviation
 %       y_filtered : forward pass KF estimates, mean 
 %       y_filtered_sd : forward pass KF estimates, standard deviation
+%       The above are all from first to last measurement with 1 sec resolution  
 %
 %   
 %   The supported variable arguments are as follows:
@@ -20,6 +21,8 @@ function output=SmoothGlucoseData(t,y,t_i,varargin)
 %   'plotInternalStates' : 0 or 1
 %   'startDateTime' : a datetime
 %   'dynamicModel' : 0 or 1
+%   't_out : user-supplied vector of times that an estimate is wanted for, 
+%            either relative time or array of datetimes
 %
 %   y_error can be set to:
 %    - [], an empty array, to signify that limits from ISO 15971 should be used
@@ -59,12 +62,28 @@ function output=SmoothGlucoseData(t,y,t_i,varargin)
 %   is lumped together to one state in this model)
 %   Default if not supplied is 1
 
-% TODO handle datetime arrays by converting them to relative time and back
-% TODO handle timeseries
-% TODO make key/value input vararg structure
 % TODO autodetect unit of input data (if majority of data is less than 30, set unit  = mmol/L, otherwise mg/dL
- 
+% TODO adaptive filtering of outliers
+
 parsedArgs = parseInputVarArgs(varargin);
+
+if isdatetime(t_in)
+    %convert to relative time
+    t=convertToRelativeTime(t_in, t_in(1));
+    %override startDateTime
+    if(parsedArgs.startDateTime~=0)
+        disp('Warning! Overriding startDateTime since t_in was a datetime array')
+    end
+    parsedArgs.startDateTime = t_in(1);
+else
+    %Assume relative time is passed in
+    t=t_in;
+end
+
+%Make input matrices dense (Remove any nan entries in y)
+nonNan = ~isnan(y_in);
+y = y_in(nonNan);
+t = t(nonNan);
 
 
 %Interpret outlierRemoval
@@ -79,13 +98,8 @@ elseif parsedArgs.outlierRemoval==4
     outlierStds=1; 
 end
 
-%Determine delta_t to use (TODO always set to 1 sec)?
-delta_t = min(diff(t_i));    % Time step of interpolated signal (minutes)
-if delta_t>0.5
-    delta_t = 0.5;     %Half a minute is max step size recommended
-elseif delta_t<1/60
-    delta_t = 1/60;	   %Stepping more often than every second is not recommended
-end
+delta_t = 1/60;	   %Stepping more often than every second is not recommended
+t_i = t(1):delta_t:t(end);
 
 %Set dynamic model to use
 dynModel = setDynamicModel(parsedArgs.dynModelNo, delta_t);
@@ -96,17 +110,9 @@ sdsInConfInterval = 2.5; %2 for 95% CI, 2.5 for 99% CI
 error2var = @(error) (error/sdsInConfInterval)^2; %Assumes normal distribution, and  error is given as a 99% confidence interval
 
 if length(parsedArgs.y_error)==length(y)   % Assume user supplied error estimates
-     y_error = parsedArgs.y_error
-elseif isempty(parsedArgs.y_error)         % Empty array supplied, assume error follows  
-    y_error = zeros(size(y));              % ISO 15971, set it based on the measured values
-    for i = 1:length(y) % Make error bars (assumes fingerprick measurement
-                        % errors according to ISO15197)
-        if y(i)>5.6
-            y_error(i) = 0.2*y(i);
-        else
-            y_error(i) = 0.83;
-        end
-    end
+     y_error = parsedArgs.y_error;
+elseif isempty(parsedArgs.y_error)         % Empty array supplied, assume error follows ISO15971
+    y_error = setIsoError(y);
 elseif ischar(y_error) && strcmp(y_error, 'Adaptive')==1
     error('Adaptive filtering not implemented yet')
 end
@@ -130,10 +136,7 @@ PBar=dynModel.initCov;
 PHat=PBar;
 
 l=1;
-%Remove any nan entries
-nonNan = ~isnan(y) & ~isnan(t);
-y = y(nonNan);
-t = t(nonNan);
+
 
 %%% Kalman filter forward pass
 for k = 1:length(t_i)
@@ -207,7 +210,13 @@ output.y_filtered_sd = zeros(size(output.y_filtered));
 for k = 1:length(t_i)
     output.y_filtered_sd(k) = sqrt(P_hat_f(1,1,k));
 end
-%TODO add internal states?
+output.t = t;
+output.x_filtered = x_hat_f;
+output.x_smoothed = x_smoothed;
+
+%Add user supplied wanted time
+output.y_smoothed_at_tout = interpolatedValuesAt(parsedArgs.tout,t_i,output.y_smoothed, parsedArgs.startDateTime);
+
 
 %Plot if specified
 if isdatetime(parsedArgs.startDateTime)
@@ -270,7 +279,6 @@ end%function SmoothGlucoseData
 
 %Helper method to parse the arguments
 function parsedArgs = parseInputVarArgs(varargs)
-    
     %Set defaults
     parsedArgs.outlierRemoval = 0;
     parsedArgs.plotResult = 0;
@@ -278,6 +286,7 @@ function parsedArgs = parseInputVarArgs(varargs)
     parsedArgs.startDateTime = 0;
     parsedArgs.dynModelNo = 1;
     parsedArgs.y_error = [];
+    parsedArgs.tout = [];
     
     if mod(size(varargs,2),2)~=0
         error(['key/value arguments are not even:' num2str(size(varargs))])
@@ -286,7 +295,6 @@ function parsedArgs = parseInputVarArgs(varargs)
         if isfield(parsedArgs,varargs{i})
             %disp(['Parsing argument:' varargs{i}])
             parsedArgs.(varargs{i})=varargs{i+1};
-           
         else
             error(['Invalid argument supplied:' num2str(varargs{i})])
         end
@@ -295,25 +303,63 @@ end
 
 %Helper method to set dynamic modelplot
 function dynModel=setDynamicModel(dynModelNo,delta_t)
-if(dynModelNo==1) %simple 2.order system where the rate of change of glucose dies out.
-    a=-0.025;
-    F =[0 1;0 a];               % System matrix (continuous)
-    dynModel.Q=[0 0;0 0.01*delta_t];     % Process noise covariance matrix.
-    dynModel.H=[1 0];                    % Measurement matrix.
-    dynModel.initCov = diag([0.25 1]);   % Initial covariance
-    %%% Discretization
-    dynModel.Phi=expm(F*delta_t);        % Discrete state transition matrix
-    dynModel.stateNames = {'Gp','dGp'};
-elseif (dynModelNo==2)
-    s=0.02;
-    Td = 35.0;
-    F =[0 0 s;0 -1/Td 0;0 1/Td -1/Td]; % System matrix (continuous)
-    dynModel.Q=[0 0 0;0 0.1*delta_t 0;0 0 0]; % Process noise covariance matrix.
-    dynModel.H=[1 0 0];                       % Measurement matrix.
-    dynModel.initCov = diag([0.25 100 100]);         % Initial covariance
-    dynModel.Phi=expm(F*delta_t);                    % Discrete state transition matrix
-    dynModel.stateNames = {'Gp','C','R'};
-else
-    error(['Unsupported model:' num2str(model)])
+    if(dynModelNo==1) %simple 2.order system where the rate of change of glucose dies out.
+        a=-0.025;
+        F =[0 1;0 a];               % System matrix (continuous)
+        dynModel.Q=[0 0;0 0.01*delta_t];     % Process noise covariance matrix.
+        dynModel.H=[1 0];                    % Measurement matrix.
+        dynModel.initCov = diag([0.25 1]);   % Initial covariance
+        %%% Discretization
+        dynModel.Phi=expm(F*delta_t);        % Discrete state transition matrix
+        dynModel.stateNames = {'Gp','dGp'};
+    elseif (dynModelNo==2)
+        s=0.02;
+        Td = 35.0;
+        F =[0 0 s;0 -1/Td 0;0 1/Td -1/Td]; % System matrix (continuous)
+        dynModel.Q=[0 0 0;0 10*delta_t 0;0 0 0]; % Process noise covariance matrix.
+        dynModel.H=[1 0 0];                       % Measurement matrix.
+        dynModel.initCov = diag([10 100 100]);         % Initial covariance
+        dynModel.Phi=expm(F*delta_t);                    % Discrete state transition matrix
+        dynModel.stateNames = {'Gp','C','R'};
+    else
+        error(['Unsupported model:' num2str(model)])
+    end
 end
+
+function t = convertToRelativeTime(datetimes,startdatetime)
+    t=zeros(length(datetimes),1);
+    for i=2:length(datetimes)
+        t(i) = minutes(datetimes(i)-startdatetime);
+    end
+end
+
+function y_error = setIsoError(y)
+    y_error = zeros(size(y));              % ISO 15971, set it based on the measured values
+    for i = 1:length(y) % Make error bars (assumes fingerprick measurement
+                        % errors according to ISO15197)
+        if y(i)>5.6
+            y_error(i) = 0.2*y(i);
+        else
+            y_error(i) = 0.83;
+        end
+    end
+end
+
+function yout = interpolatedValuesAt(tout, t, y, startdatetime)
+    if isdatetime(tout)
+        tout = convertToRelativeTime(tout, startdatetime);
+    end
+    yout = zeros(size(tout));
+    for i = 1:length(tout)
+        if tout(i)>t(end) || tout(i)<t(1)
+            yout(i) = NaN;
+        else
+            for j=1:length(t)
+                if t(j)>=tout(i)
+                    yout(i) = y(j);
+                    break;
+                end
+            end
+        end
+    end
 end
