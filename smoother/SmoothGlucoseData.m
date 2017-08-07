@@ -4,23 +4,24 @@ function output=SmoothGlucoseData(t_in,y_in,varargin)
 % Usage:
 % output=SmoothGlucoseData(t,y,t_i,...)
 %   Generates a smoothed estimate from the input data t (array of datetime, 
-%   or time in minutes) and y (glucose values)
+%   or time in minutes as doubles) and y (glucose values)
 %
 %   output is a struct with fields:
 %       y_smoothed : smoother estimates, mean 
 %       y_smoothed_sd : smoother estimates, standard deviation
 %       y_filtered : forward pass KF estimates, mean 
 %       y_filtered_sd : forward pass KF estimates, standard deviation
+%       t_i : interpolated time corresponding to the above vectors
 %       The above are all from first to last measurement with 1 sec resolution  
 %
 %   
 %   The supported variable arguments are as follows:
 %   'y_error' : [] or an array of same length as y
-%   'outlierRemoval' : 0,1,2,3, or four 4
+%   'outlierRemoval' : 0,1,2,3, or 4
 %   'plotResult' : 0, 1 or 2
 %   'plotInternalStates' : 0 or 1
 %   'startDateTime' : a datetime
-%   'dynamicModel' : 0 or 1
+%   'dynamicModel' : 1 or 2
 %   't_out : user-supplied vector of times that an estimate is wanted for, 
 %            either relative time or array of datetimes
 %
@@ -115,6 +116,8 @@ elseif isempty(parsedArgs.y_error)         % Empty array supplied, assume error 
     y_error = setIsoError(y);
 elseif ischar(y_error) && strcmp(y_error, 'Adaptive')==1
     error('Adaptive filtering not implemented yet')
+else
+    error('Bad y_array argument supplied')    
 end
 
 
@@ -210,7 +213,8 @@ output.y_filtered_sd = zeros(size(output.y_filtered));
 for k = 1:length(t_i)
     output.y_filtered_sd(k) = sqrt(P_hat_f(1,1,k));
 end
-output.t = t;
+output.t_i = t_i;
+
 output.x_filtered = x_hat_f;
 output.x_smoothed = x_smoothed;
 
@@ -267,16 +271,6 @@ end
 
 end%function SmoothGlucoseData
 
-%%% R value rationale: 
-% Blood glucose meters are supposed to lie within 20% of the real
-% value 
-% The ISO15197:2013 standard specifies error less than +-0.83 for BG <= 5.6,
-% and less than 20% of the true value for BG>5.6 mmol/L.
-% Low level: Assuming normal distribution, this means that 2 standard deviations (95% CI)
-% at a normal level of 5 mmol/L shall be less than 0.83 mmol/L => 2SD = 0.415mmol/L 
-% => SD^2=VAR=0.172 (mmol/L)^2
-% High level: 2SD=0.2*y, SD=0.1y, VAR = 0.01y^2
-
 %Helper method to parse the arguments
 function parsedArgs = parseInputVarArgs(varargs)
     %Set defaults
@@ -301,7 +295,7 @@ function parsedArgs = parseInputVarArgs(varargs)
     end
 end
 
-%Helper method to set dynamic modelplot
+%Helper method to set dynamic model
 function dynModel=setDynamicModel(dynModelNo,delta_t)
     if(dynModelNo==1) %simple 2.order system where the rate of change of glucose dies out.
         a=-0.025;
