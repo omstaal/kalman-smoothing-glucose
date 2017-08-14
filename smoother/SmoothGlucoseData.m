@@ -17,7 +17,8 @@ function output=SmoothGlucoseData(t_in,y_in,varargin)
 %   
 %   The supported variable arguments are as follows:
 %   'y_error' : [] or an array of same length as y
-%   'outlierRemoval' : 0,1,2,3, or 4
+%   'outlierRemoval' : 0,1 or 2
+%   'outlierSDlimit : a number > 0
 %   'plotResult' : 0, 1 or 2
 %   'plotInternalStates' : 0 or 1
 %   'startDateTime' : a datetime
@@ -34,8 +35,8 @@ function output=SmoothGlucoseData(t_in,y_in,varargin)
 %   The outlierRemoval parameter controls outlier removal:
 %   Measurements are considered to be outliers if the innovation is outside
 %   X std devs of the innovation variance in the forward pass Kalmanfilter
-%   If outlierRemoval==1, a limit of 5 std dev is used (conservative) 
-%   If outlierRemoval==2, a limit of 3 std devs (medium)
+%   If outlierRemoval==1, outlier removal is performed based on the smoothed estimate.
+%   If outlierRemoval==2, fora limit of 2.5 std devs (medium)
 %   If outlierRemoval==3, a limit of 2 std devs (aggressive)
 %   If outlierRemoval==4, a limit of 1 std devs (very aggressive)
 %   If outlierRemoval is any other value, outlier removal is not done
@@ -43,14 +44,19 @@ function output=SmoothGlucoseData(t_in,y_in,varargin)
 %   surround data allows
 %   Default if not supplied is 0 (no outlier removal, only suppression)
 %
+%   outlierSDlimit is a double specifying how many standard deviations of the estimate to use
+%   use when removing outliers. 2.5 would be a conservative value while 1
+%   would lead to quite aggressive outlier removal
+%   Default if not supplied is 2.5 
+%
 %   If plotResult==1, a plot will be produced showing the result of the
 %   smoothing in a new figure. If plotResult==2, the estimates from the forward pass KF
 %   will be added to the same plot.
 %   Default if not supplied is 0
 %
 %   if plotInternalStates==1, the internal states of the dynamic model in
-%   use wil be plotted in a new figure.
-%   Defualt if not supplied is 0
+%   use will be plotted in a new figure.
+%   Default if not supplied is 0
 %
 %   startDateTime is a datetime defining the start 
 %   of the experiment. Allows for plotting the experiment with the datetime format.
@@ -91,19 +97,6 @@ nonNan = ~isnan(y_in);
 y = y_in(nonNan);
 t = t(nonNan);
 
-
-%Interpret outlierRemoval
-outlierStds=NaN;
-if parsedArgs.outlierRemoval==1
-    outlierStds=5;
-elseif parsedArgs.outlierRemoval==2
-    outlierStds=3;
-elseif parsedArgs.outlierRemoval==3
-    outlierStds=2;
-elseif parsedArgs.outlierRemoval==4
-    outlierStds=1; 
-end
-
 delta_t = 1/60;	   %Stepping more often than every second is not recommended
 t_i = t(1):delta_t:t(end);
 
@@ -118,7 +111,7 @@ if length(parsedArgs.y_error)==length(y)   % Assume user supplied error estimate
      y_error = parsedArgs.y_error;
 elseif isempty(parsedArgs.y_error)         % Empty array supplied, assume error follows ISO15971
     y_error = setIsoError(y);
-elseif ischar(y_error) && strcmp(y_error, 'Adaptive')==1
+elseif ischar(y_error) && strcmp(parsedArgs.y_error, 'Adaptive')==1
     error('Adaptive filtering not implemented yet')
 else
     error('Bad y_array argument supplied')    
@@ -145,66 +138,78 @@ PHat=PBar;
 l=1;
 output.outliers = false(size(y));
 
-%%% Kalman filter forward pass
-for k = 1:length(t_i)
-    %TU - Time update
-    xBar = dynModel.Phi*xHat;
-    PBar = dynModel.Phi*PHat*dynModel.Phi' + dynModel.Q;
-    %Store
-    x_bar_f(:,k)=xBar;
-    P_bar_f(:,:,k)=PBar;
-    
-    measUpdateDone=0;
-    %MU - Measurement Update only when we have a measurement
-    while length(t)>=l && t_i(k)>=t(l)  % Interpolated time has passed one 
-                                        % of the measurement times, process
-                                        % all measurements that has occurred
-        if measUpdateDone==1
-            % More than one measurement at the current time
-            xBar = xHat;
-            PBar = PHat;
-        end
-        dz = y(l)-dynModel.H*xBar;
-        R = error2var(y_error(l));
-        Pz = (dynModel.H*PBar*dynModel.H'+R);
-        if isnan(outlierStds)
-            isOutlier = false;
-        else
-            % Check the innovation
-            if(abs(dz)>outlierStds*sqrt(Pz))
-                isOutlier=true;
-                disp(['Flagged measurement as outlier: t = ' num2str(t(l)) ' [min], y = ' num2str(y(l)) ' [mmol/L].'])
-            else
-                isOutlier=false;
-            end
-        end
-        output.outliers(l)=isOutlier;
-        if ~isOutlier
-            %Measurement update
-            K=PBar*dynModel.H'/Pz;
-            xHat = xBar + K*dz;
-            PHat = (eye(size(PBar))-K*dynModel.H)*PBar;
-            measUpdateDone=1;
-        end
-        l=l+1;
-    end
-    if measUpdateDone==0    % No measurement was available at this time 
-        xHat=xBar;
-        PHat=PBar;
-    end
-    % Store
-    x_hat_f(:,k)=xHat;
-    P_hat_f(:,:,k)=PHat;
-end % for k
+doneFindingOutliers=false;
 
-%%% Rauch-Tung-Striebel backward pass
-x_smoothed(:,k)=xHat;
-P_smoothed(:,:,k)=PHat;
-for k = length(t_i)-1:-1:1
-    C=P_hat_f(:,:,k)*dynModel.Phi'*inv(P_bar_f(:,:,k+1));
-    x_smoothed(:,k)=x_hat_f(:,k)+C*(x_smoothed(:,k+1)-x_bar_f(:,k+1));
-    P_smoothed(:,:,k)=P_hat_f(:,:,k)+C*(P_smoothed(:,:,k+1)-P_bar_f(:,:,k+1))*C';  
-end
+while ~doneFindingOutliers;
+    %%% Kalman filter forward pass
+    for k = 1:length(t_i)
+        %TU - Time update
+        xBar = dynModel.Phi*xHat;
+        PBar = dynModel.Phi*PHat*dynModel.Phi' + dynModel.Q;
+        %Store
+        x_bar_f(:,k)=xBar;
+        P_bar_f(:,:,k)=PBar;
+
+        measUpdateDone=0;
+        %MU - Measurement Update only when we have a measurement
+        while length(t)>=l && t_i(k)>=t(l)  % Interpolated time has passed one 
+                                            % of the measurement times, process
+                                            % all measurements that has occurred
+            if measUpdateDone==1
+                % More than one measurement at the current time
+                xBar = xHat;
+                PBar = PHat;
+            end
+            dz = y(l)-dynModel.H*xBar;
+            R = error2var(y_error(l));
+            Pz = (dynModel.H*PBar*dynModel.H'+R);
+            if parsedArgs.outlierRemoval == 1 
+                % Check the innovation
+                if(abs(dz)>parsedArgs.outlierSDlimit*sqrt(Pz))
+                    output.outliers(l)=true;
+                    disp(['Forward pass flagged measurement as outlier: t = ' num2str(t(l)) ' [min], y = ' num2str(y(l)) ' [mmol/L].'])
+                end
+            end
+            if ~output.outliers(l)
+                %Measurement update
+                K=PBar*dynModel.H'/Pz;
+                xHat = xBar + K*dz;
+                PHat = (eye(size(PBar))-K*dynModel.H)*PBar;
+                measUpdateDone=1;
+            end
+            l=l+1;
+        end
+        if measUpdateDone==0    % No measurement was available at this time 
+            xHat=xBar;
+            PHat=PBar;
+        end
+        % Store
+        x_hat_f(:,k)=xHat;
+        P_hat_f(:,:,k)=PHat;
+    end % for k
+
+    %%% Rauch-Tung-Striebel backward pass
+    x_smoothed(:,k)=xHat;
+    P_smoothed(:,:,k)=PHat;
+    for k = length(t_i)-1:-1:1
+        C=P_hat_f(:,:,k)*dynModel.Phi'*inv(P_bar_f(:,:,k+1));
+        x_smoothed(:,k)=x_hat_f(:,k)+C*(x_smoothed(:,k+1)-x_bar_f(:,k+1));
+        P_smoothed(:,:,k)=P_hat_f(:,:,k)+C*(P_smoothed(:,:,k+1)-P_bar_f(:,:,k+1))*C';  
+    end
+    if parsedArgs.outlierRemoval == 2
+        %Run through all measurements and see if any are outside the error
+        %smoothed band, if so they are outliers
+        foundNewOutliers = false;
+        if ~foundNewOutliers
+            doneFindingOutliers = true;
+        end
+    else
+        doneFindingOutliers = true;
+        
+    end
+    
+end %while not doneFindingOutliers
+%Smoothing done
 
 %Generate output struct
 output.y_smoothed = x_smoothed(1,:);
@@ -280,6 +285,7 @@ end%function SmoothGlucoseData
 function parsedArgs = parseInputVarArgs(varargs)
     %Set defaults
     parsedArgs.outlierRemoval = 0;
+    parsedArgs.outlierSDlimit = 2.5;
     parsedArgs.plotResult = 0;
     parsedArgs.plotInternalStates = 0;
     parsedArgs.startDateTime = 0;
@@ -331,11 +337,12 @@ function t = convertToRelativeTime(datetimes,startdatetime)
     end
 end
 
-function y_mgdL = convertToMgdl(y_mmolL)
-    t=zeros(length(datetimes),1);
-    for i=2:length(datetimes)
-        t(i) = minutes(datetimes(i)-startdatetime);
-    end
+function y_mgdL = convertTo_mg_dL(y_mmolL)
+    y_mgdL = y_mmolL*18.018;
+end
+
+function y_mmolL = convertTo_mmol_L(y_mgdL)
+    y_mmolL = y_mgdL/18.018;
 end
 
 function y_error = setIsoError(y)
