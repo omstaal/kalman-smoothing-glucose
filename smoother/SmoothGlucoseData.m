@@ -65,6 +65,9 @@ function output=SmoothGlucoseData(t_in,y_in,varargin)
 
 % TODO autodetect unit of input data (if majority of data is less than 30, set unit  = mmol/L, otherwise mg/dL
 % TODO adaptive filtering of outliers
+% TODO better outlier removal - forward
+% TODO possibility to specify "no meal/insulin input" periods in the input
+% data, where a lower process noise should be used.
 
 parsedArgs = parseInputVarArgs(varargin);
 
@@ -103,9 +106,8 @@ delta_t = 1/60;	   %Stepping more often than every second is not recommended
 t_i = t(1):delta_t:t(end);
 
 %Set dynamic model to use
-dynModel = setDynamicModel(parsedArgs.dynModelNo, delta_t);
+dynModel = setDynamicModel(parsedArgs.dynamicModel, delta_t);
 Nstates = length(dynModel.H);
-
 %Set up error to variance computation
 sdsInConfInterval = 2.5; %2 for 95% CI, 2.5 for 99% CI
 error2var = @(error) (error/sdsInConfInterval)^2; %Assumes normal distribution, and  error is given as a 99% confidence interval
@@ -139,7 +141,7 @@ PBar=dynModel.initCov;
 PHat=PBar;
 
 l=1;
-
+output.outliers = false(size(y));
 
 %%% Kalman filter forward pass
 for k = 1:length(t_i)
@@ -164,17 +166,18 @@ for k = 1:length(t_i)
         R = error2var(y_error(l));
         Pz = (dynModel.H*PBar*dynModel.H'+R);
         if isnan(outlierStds)
-            isOutlier = 0;
+            isOutlier = false;
         else
             % Check the innovation
             if(abs(dz)>outlierStds*sqrt(Pz))
-                isOutlier=1;
+                isOutlier=true;
                 disp(['Flagged measurement as outlier: t = ' num2str(t(l)) ' [min], y = ' num2str(y(l)) ' [mmol/L].'])
             else
-                isOutlier=0;
+                isOutlier=false;
             end
         end
-        if isOutlier==0
+        output.outliers(l)=isOutlier;
+        if ~isOutlier
             %Measurement update
             K=PBar*dynModel.H'/Pz;
             xHat = xBar + K*dz;
@@ -278,7 +281,7 @@ function parsedArgs = parseInputVarArgs(varargs)
     parsedArgs.plotResult = 0;
     parsedArgs.plotInternalStates = 0;
     parsedArgs.startDateTime = 0;
-    parsedArgs.dynModelNo = 1;
+    parsedArgs.dynamicModel = 1;
     parsedArgs.y_error = [];
     parsedArgs.tout = [];
     
@@ -300,19 +303,18 @@ function dynModel=setDynamicModel(dynModelNo,delta_t)
     if(dynModelNo==1) %simple 2.order system where the rate of change of glucose dies out.
         a=-0.025;
         F =[0 1;0 a];               % System matrix (continuous)
-        dynModel.Q=[0 0;0 0.01*delta_t];     % Process noise covariance matrix.
+        dynModel.Q=[0 0;0 0.02*delta_t];     % Process noise covariance matrix.
         dynModel.H=[1 0];                    % Measurement matrix.
         dynModel.initCov = diag([0.25 1]);   % Initial covariance
         %%% Discretization
         dynModel.Phi=expm(F*delta_t);        % Discrete state transition matrix
         dynModel.stateNames = {'Gp','dGp'};
     elseif (dynModelNo==2)
-        s=0.02;
-        Td = 35.0;
-        F =[0 0 s;0 -1/Td 0;0 1/Td -1/Td]; % System matrix (continuous)
-        dynModel.Q=[0 0 0;0 10*delta_t 0;0 0 0]; % Process noise covariance matrix.
+        Td = 15.000; % Time constant describing flow between compartments [min]
+        F =[0 0 1;0 -1/Td 0;0 1/Td -1/Td]; % System matrix (continuous)
+        dynModel.Q=[0 0 0;0 0.02*delta_t 0;0 0 0]; % Process noise covariance matrix.
         dynModel.H=[1 0 0];                       % Measurement matrix.
-        dynModel.initCov = diag([10 100 100]);         % Initial covariance
+        dynModel.initCov = diag([10 1 1]);         % Initial covariance
         dynModel.Phi=expm(F*delta_t);                    % Discrete state transition matrix
         dynModel.stateNames = {'Gp','C','R'};
     else
@@ -321,6 +323,13 @@ function dynModel=setDynamicModel(dynModelNo,delta_t)
 end
 
 function t = convertToRelativeTime(datetimes,startdatetime)
+    t=zeros(length(datetimes),1);
+    for i=2:length(datetimes)
+        t(i) = minutes(datetimes(i)-startdatetime);
+    end
+end
+
+function y_mgdL = convertToMgdl(y_mmolL)
     t=zeros(length(datetimes),1);
     for i=2:length(datetimes)
         t(i) = minutes(datetimes(i)-startdatetime);
