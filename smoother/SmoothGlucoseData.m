@@ -38,8 +38,10 @@ function output=SmoothGlucoseData(t_in,y_in,varargin)
 %   If outlierRemoval==2, a limit of 3 std devs (medium)
 %   If outlierRemoval==3, a limit of 2 std devs (aggressive)
 %   If outlierRemoval==4, a limit of 1 std devs (very aggressive)
-%   If outlierRemoval is any other value, outlier removal is not done before smoothing). 
-%   Default if not supplied is 0   
+%   If outlierRemoval is any other value, outlier removal is not done
+%   Note that the smoothing approach inherently suppresses outliers if
+%   surround data allows
+%   Default if not supplied is 0 (no outlier removal, only suppression)
 %
 %   If plotResult==1, a plot will be produced showing the result of the
 %   smoothing in a new figure. If plotResult==2, the estimates from the forward pass KF
@@ -238,7 +240,7 @@ end
 if parsedArgs.plotResult>=1
     figure()
     
-      %h1 = errorbar(t_plot,y,y_error,'r.','MarkerSize',10,'LineWidth',1); % Using 2 sigma
+    %h1 = errorbar(t_plot,y,y_error,'r.','MarkerSize',10,'LineWidth',1); % Using 2 sigma
     h1 = plot(t_plot,y,'r.','MarkerSize',10); % Using 2 sigma
     
     hold on
