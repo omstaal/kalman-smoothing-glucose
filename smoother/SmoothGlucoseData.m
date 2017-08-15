@@ -23,11 +23,12 @@ function output=SmoothGlucoseData(t_in,y_in,varargin)
 %   'plotInternalStates' : 0 or 1
 %   'startDateTime' : a datetime
 %   'dynamicModel' : 1 or 2
-%   't_out : user-supplied vector of times that an estimate is wanted for, 
+%   't_out' : user-supplied vector of times that an estimate is wanted for, 
 %            either relative time or array of datetimes
+%   'unit'  : string decribing which glucose unit the y data is given in
 %
 %   y_error can be set to:
-%    - [], an empty array, to signify that limits from ISO 15971 should be used
+%    - [], an empty array, to signify that limits from ISO 15197 should be used
 %    - a user supplied array of same length as y, that has the errors for
 %    individual measurements in y
 %   Default if not supplied is []
@@ -36,12 +37,10 @@ function output=SmoothGlucoseData(t_in,y_in,varargin)
 %   Measurements are considered to be outliers if the innovation is outside
 %   X std devs of the innovation variance in the forward pass Kalmanfilter
 %   If outlierRemoval==1, outlier removal is performed based on the smoothed estimate.
-%   If outlierRemoval==2, fora limit of 2.5 std devs (medium)
-%   If outlierRemoval==3, a limit of 2 std devs (aggressive)
-%   If outlierRemoval==4, a limit of 1 std devs (very aggressive)
+%   If outlierRemoval==2, outlier removal is performed based on the filtered estimate.
 %   If outlierRemoval is any other value, outlier removal is not done
 %   Note that the smoothing approach inherently suppresses outliers if
-%   surround data allows
+%   surrounding data allows
 %   Default if not supplied is 0 (no outlier removal, only suppression)
 %
 %   outlierSDlimit is a double specifying how many standard deviations of the estimate to use
@@ -70,15 +69,30 @@ function output=SmoothGlucoseData(t_in,y_in,varargin)
 %   compartment, which is fed by a central compartment (insulin and glucose
 %   is lumped together to one state in this model)
 %   Default if not supplied is 1
+%
+%   If unit is set to 'mg_dl' the input data (y, y_error) is assumed to be in mg/dL
+%   If set to 'mmol_l' the input data is assumed to be in mmol/L
+%   If set to 'auto', a autodetection routine is run on y that guesses
+%   which unit is used based on the values found
+%   Default if not supplied is 'auto'
 
-% TODO autodetect unit of input data (if majority of data is less than 30, set unit  = mmol/L, otherwise mg/dL
-% TODO adaptive filtering of outliers
-% TODO better outlier removal - forward
-% TODO possibility to specify "no meal/insulin input" periods in the input
+%TODO list for the future
+% 1) possibility to specify "no meal/insulin input" periods in the input
 % data, where a lower process noise should be used.
 
+%Parse the variable arguments
 parsedArgs = parseInputVarArgs(varargin);
 
+%Handle unit
+if strcmp(parsedArgs.unit,'auto')==0
+   parsedArgs.unit = autoDetectUnit(y_in);
+end
+if strcmp(parsedArgs.unit,'mgdl')==0 %This code assumes mmol/L, so convert to that and convert back at the end
+    y_in = convertTo_mg_dL(y_in);
+    parsedArgs.y_error = convertTo_mmol_L(parsedArgs.y_error);
+end
+
+%Handle time
 if isdatetime(t_in)
     %convert to relative time
     t=convertToRelativeTime(t_in, t_in(1));
@@ -92,55 +106,49 @@ else
     t=t_in;
 end
 
-%Make input matrices dense (Remove any nan entries in y)
+%Make input vectors dense (Remove any nan entries in y)
 nonNan = ~isnan(y_in);
 y = y_in(nonNan);
 t = t(nonNan);
 
-delta_t = 1/60;	   %Stepping more often than every second is not recommended
+delta_t = 1/6;	   %Stepping more often than every second is not recommended, nor more seldom than 1 minute
 t_i = t(1):delta_t:t(end);
 
 %Set dynamic model to use
 dynModel = setDynamicModel(parsedArgs.dynamicModel, delta_t);
 Nstates = length(dynModel.H);
+
 %Set up error to variance computation
 sdsInConfInterval = 2.5; %2 for 95% CI, 2.5 for 99% CI
 error2var = @(error) (error/sdsInConfInterval)^2; %Assumes normal distribution, and  error is given as a 99% confidence interval
 
 if length(parsedArgs.y_error)==length(y)   % Assume user supplied error estimates
      y_error = parsedArgs.y_error;
-elseif isempty(parsedArgs.y_error)         % Empty array supplied, assume error follows ISO15971
+elseif isempty(parsedArgs.y_error)         % Empty array supplied, assume error follows ISO15197
     y_error = setIsoError(y);
-elseif ischar(y_error) && strcmp(parsedArgs.y_error, 'Adaptive')==1
-    error('Adaptive filtering not implemented yet')
 else
     error('Bad y_array argument supplied')    
 end
 
-
-
-%%% Storage
-x_hat_f = zeros(Nstates,length(t_i));         % A priori state vector storage, forward pass
-x_bar_f = zeros(Nstates,length(t_i));         % A posteriori state vector storage, forward pass
-P_hat_f = zeros(Nstates,Nstates,length(t_i));       % A priori covariance matrix storage, forward pass
-P_bar_f = zeros(Nstates,Nstates,length(t_i));       % A posteriori covariance matrix storage, forward pass
-x_smoothed = zeros(Nstates,length(t_i));            % State vector storage, backward pass
-P_smoothed = zeros(Nstates,Nstates,length(t_i));    % Covariance matrix storage, backward pass
-
-
-%%% Initialization
-xBar = zeros(Nstates,1);
-xBar(1)=y(1);
-xHat=xBar;
-PBar=dynModel.initCov;
-PHat=PBar;
-
-l=1;
 output.outliers = false(size(y));
-
 doneFindingOutliers=false;
 
 while ~doneFindingOutliers;
+    %%% Storage
+    x_hat_f = zeros(Nstates,length(t_i));         % A priori state vector storage, forward pass
+    x_bar_f = zeros(Nstates,length(t_i));         % A posteriori state vector storage, forward pass
+    P_hat_f = zeros(Nstates,Nstates,length(t_i));       % A priori covariance matrix storage, forward pass
+    P_bar_f = zeros(Nstates,Nstates,length(t_i));       % A posteriori covariance matrix storage, forward pass
+    x_smoothed = zeros(Nstates,length(t_i));            % State vector storage, backward pass
+    P_smoothed = zeros(Nstates,Nstates,length(t_i));    % Covariance matrix storage, backward pass
+
+    %%% Initialization
+    xBar = zeros(Nstates,1);
+    xBar(1)=y(1);
+    xHat=xBar;
+    PBar=dynModel.initCov;
+    PHat=PBar;
+    l=1;
     %%% Kalman filter forward pass
     for k = 1:length(t_i)
         %TU - Time update
@@ -163,7 +171,7 @@ while ~doneFindingOutliers;
             dz = y(l)-dynModel.H*xBar;
             R = error2var(y_error(l));
             Pz = (dynModel.H*PBar*dynModel.H'+R);
-            if parsedArgs.outlierRemoval == 1 
+            if parsedArgs.outlierRemoval == 2 
                 % Check the innovation
                 if(abs(dz)>parsedArgs.outlierSDlimit*sqrt(Pz))
                     output.outliers(l)=true;
@@ -196,27 +204,40 @@ while ~doneFindingOutliers;
         x_smoothed(:,k)=x_hat_f(:,k)+C*(x_smoothed(:,k+1)-x_bar_f(:,k+1));
         P_smoothed(:,:,k)=P_hat_f(:,:,k)+C*(P_smoothed(:,:,k+1)-P_bar_f(:,:,k+1))*C';  
     end
-    if parsedArgs.outlierRemoval == 2
+    
+    %Generate output struct
+    output.y_smoothed = x_smoothed(1,:);
+    output.y_smoothed_sd = zeros(size(output.y_smoothed));
+    for k = 1:length(t_i)
+        output.y_smoothed_sd(k) = sqrt(P_smoothed(1,1,k));
+    end
+    
+    if parsedArgs.outlierRemoval == 1
         %Run through all measurements and see if any are outside the error
         %smoothed band, if so they are outliers
         foundNewOutliers = false;
+        y_s_mean  = interpolatedValuesAt(t,t_i,output.y_smoothed, parsedArgs.startDateTime);
+        y_s_sd  = interpolatedValuesAt(t,t_i,output.y_smoothed_sd, parsedArgs.startDateTime);
+        for i = 1:length(y)
+            if ~output.outliers(i) && abs(y(i)-y_s_mean(i))/y_s_sd(i)>parsedArgs.outlierSDlimit
+               output.outliers(i)=true;
+               foundNewOutliers = true;
+               disp(['Smoother flagged measurement ' num2str(i) ' as outlier: t = ' num2str(t(i)) ' [min], y = ' num2str(y(i)) ' [mmol/L].']) 
+            end
+        end
         if ~foundNewOutliers
             doneFindingOutliers = true;
+        else
+            disp(['Smoother needs a second pass due to outliers detected. Total # outliers in input data:' num2str(sum(output.outliers))]) 
+            
         end
     else
         doneFindingOutliers = true;
-        
     end
-    
 end %while not doneFindingOutliers
 %Smoothing done
 
-%Generate output struct
-output.y_smoothed = x_smoothed(1,:);
-output.y_smoothed_sd = zeros(size(output.y_smoothed));
-for k = 1:length(t_i)
-    output.y_smoothed_sd(k) = sqrt(P_smoothed(1,1,k));
-end
+
 
 output.y_filtered = x_hat_f(1,:);
 output.y_filtered_sd = zeros(size(output.y_filtered));
@@ -230,6 +251,7 @@ output.x_smoothed = x_smoothed;
 
 %Add user supplied wanted time
 output.y_smoothed_at_tout = interpolatedValuesAt(parsedArgs.tout,t_i,output.y_smoothed, parsedArgs.startDateTime);
+output.y_smoothed_sd_at_tout = interpolatedValuesAt(parsedArgs.tout,t_i,output.y_smoothed_sd, parsedArgs.startDateTime);
 
 
 %Plot if specified
@@ -278,7 +300,15 @@ if parsedArgs.plotInternalStates==1
     legend(dynModel.stateNames)
     ylabel('Smoothed internal states')
 end
-
+%Check if we need to convert back to original unit
+if strcmp(parsedArgs.unit,'mgdl')==0 
+    output.y_filtered = convertTo_mg_dL(output.y_filtered);
+    output.y_filtered_sd = convertTo_mg_dL(output.y_filtered_sd);
+    output.y_smoothed = convertTo_mg_dL(output.y_smoothed);
+    output.y_smoothed_sd = convertTo_mg_dL(output.y_smoothed_sd);
+    output.y_smoothed_at_tout = convertTo_mg_dL(output.y_smoothed_at_tout);
+    output.y_smoothed_sd_at_tout = convertTo_mg_dL(output.y_smoothed_sd_at_tout);
+end
 end%function SmoothGlucoseData
 
 %Helper method to parse the arguments
@@ -292,6 +322,7 @@ function parsedArgs = parseInputVarArgs(varargs)
     parsedArgs.dynamicModel = 1;
     parsedArgs.y_error = [];
     parsedArgs.tout = [];
+    parsedArgs.unit = 'auto';
     
     if mod(size(varargs,2),2)~=0
         error(['key/value arguments are not even:' num2str(size(varargs))])
@@ -330,6 +361,7 @@ function dynModel=setDynamicModel(dynModelNo,delta_t)
     end
 end
 
+%Helper method to convert datetimes to relative time
 function t = convertToRelativeTime(datetimes,startdatetime)
     t=zeros(length(datetimes),1);
     for i=2:length(datetimes)
@@ -337,16 +369,19 @@ function t = convertToRelativeTime(datetimes,startdatetime)
     end
 end
 
+%Helper method to convert glucose unit from mmol/L to mg/dL
 function y_mgdL = convertTo_mg_dL(y_mmolL)
     y_mgdL = y_mmolL*18.018;
 end
 
+%Helper method to convert glucose unit from mg/dL to mmol/dL
 function y_mmolL = convertTo_mmol_L(y_mgdL)
     y_mmolL = y_mgdL/18.018;
 end
 
+%Helper method that guesses a error based on the measured value, based on ISO 15197 
 function y_error = setIsoError(y)
-    y_error = zeros(size(y));              % ISO 15971, set it based on the measured values
+    y_error = zeros(size(y));              % ISO 15197, set it based on the measured values
     for i = 1:length(y) % Make error bars (assumes fingerprick measurement
                         % errors according to ISO15197)
         if y(i)>5.6
@@ -357,6 +392,7 @@ function y_error = setIsoError(y)
     end
 end
 
+%Helper function to find interpolted values at specific times
 function yout = interpolatedValuesAt(tout, t, y, startdatetime)
     if isdatetime(tout)
         tout = convertToRelativeTime(tout, startdatetime);
@@ -373,5 +409,13 @@ function yout = interpolatedValuesAt(tout, t, y, startdatetime)
                 end
             end
         end
+    end
+end
+
+%Helper function to autodetect glucose unit
+function unit = autoDetectUnit(measurements)
+    unit = 'mmol_L';
+    if mean(measurements)>50
+        unit = 'mg/dL';
     end
 end
