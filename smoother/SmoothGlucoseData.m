@@ -84,10 +84,10 @@ function output=SmoothGlucoseData(t_in,y_in,varargin)
 parsedArgs = parseInputVarArgs(varargin);
 
 %Handle unit
-if strcmp(parsedArgs.unit,'auto')==0
+if strcmp(parsedArgs.unit,'auto')==1
    parsedArgs.unit = autoDetectUnit(y_in);
 end
-if strcmp(parsedArgs.unit,'mgdl')==0 %This code assumes mmol/L, so convert to that and convert back at the end
+if strcmp(parsedArgs.unit,'mgdl')==1 %This code assumes mmol/L, so convert to that and convert back at the end
     y_in = convertTo_mg_dL(y_in);
     parsedArgs.y_error = convertTo_mmol_L(parsedArgs.y_error);
 end
@@ -416,6 +416,7 @@ end
 function unit = autoDetectUnit(measurements)
     unit = 'mmol_L';
     if mean(measurements)>50
+        disp('SmoothGlucoseData autodetected mg/dL as unit')
         unit = 'mg/dL';
     end
 end
