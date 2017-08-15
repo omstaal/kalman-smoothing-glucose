@@ -87,8 +87,8 @@ parsedArgs = parseInputVarArgs(varargin);
 if strcmp(parsedArgs.unit,'auto')==1
    parsedArgs.unit = autoDetectUnit(y_in);
 end
-if strcmp(parsedArgs.unit,'mgdl')==1 %This code assumes mmol/L, so convert to that and convert back at the end
-    y_in = convertTo_mg_dL(y_in);
+if strcmp(parsedArgs.unit,'mg_dL')==1 %This code assumes mmol/L, so convert to that and convert back at the end
+    y_in = convertTo_mmol_L(y_in);
     parsedArgs.y_error = convertTo_mmol_L(parsedArgs.y_error);
 end
 
@@ -301,7 +301,7 @@ if parsedArgs.plotInternalStates==1
     ylabel('Smoothed internal states')
 end
 %Check if we need to convert back to original unit
-if strcmp(parsedArgs.unit,'mgdl')==0 
+if strcmp(parsedArgs.unit,'mg_dL')==1
     output.y_filtered = convertTo_mg_dL(output.y_filtered);
     output.y_filtered_sd = convertTo_mg_dL(output.y_filtered_sd);
     output.y_smoothed = convertTo_mg_dL(output.y_smoothed);
@@ -417,6 +417,6 @@ function unit = autoDetectUnit(measurements)
     unit = 'mmol_L';
     if mean(measurements)>50
         disp('SmoothGlucoseData autodetected mg/dL as unit')
-        unit = 'mg/dL';
+        unit = 'mg_dL';
     end
 end
