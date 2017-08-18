@@ -1,6 +1,6 @@
-function output=SmoothGlucoseData(t_in,y_in,varargin)
-% SMOOTHGLUCOSEDATA Creates a smoothed glucose curve with variance
-%                   estimates from input glucose readings
+function output=SmoothSMBGData(t_in,y_in,varargin)
+% SMOOTHSMBGDATA Creates a smoothed glucose curve from input glucose readings,
+% assumed to come from a Self Monitoring Blood Glucose meter
 % Usage:
 % output=SmoothGlucoseData(t,y,t_i,...)
 %   Generates a smoothed estimate from the input data t (array of datetime, 
@@ -364,7 +364,7 @@ end
 %Helper method to convert datetimes to relative time
 function t = convertToRelativeTime(datetimes,startdatetime)
     t=zeros(length(datetimes),1);
-    for i=2:length(datetimes)
+    for i=1:length(datetimes)
         t(i) = minutes(datetimes(i)-startdatetime);
     end
 end
@@ -392,7 +392,7 @@ function y_error = setIsoError(y)
     end
 end
 
-%Helper function to find interpolted values at specific times
+%Helper function to find closest to wanted output times
 function yout = interpolatedValuesAt(tout, t, y, startdatetime)
     if isdatetime(tout)
         tout = convertToRelativeTime(tout, startdatetime);
