@@ -1,130 +1,51 @@
-function output=SmoothSMBGData(t_in,y_in,varargin)
-% SMOOTHSMBGDATA Creates a smoothed glucose curve from input glucose readings,
-% assumed to come from a Self Monitoring Blood Glucose meter
-% Usage:
-% output=SmoothGlucoseData(t,y,t_i,...)
-%   Generates a smoothed estimate from the input data t (array of datetime, 
-%   or time in minutes as doubles) and y (glucose values)
-%
-%   output is a struct with fields:
-%       y_smoothed : smoother estimates, mean 
-%       y_smoothed_sd : smoother estimates, standard deviation
-%       y_filtered : forward pass KF estimates, mean 
-%       y_filtered_sd : forward pass KF estimates, standard deviation
-%       t_i : interpolated time corresponding to the above vectors
-%       The above are all from first to last measurement with 1 sec resolution  
-%
-%   
-%   The supported variable arguments are as follows:
-%   'y_error' : [] or an array of same length as y
-%   'outlierRemoval' : 0,1 or 2
-%   'outlierSDlimit : a number > 0
-%   'plotResult' : 0, 1 or 2
-%   'plotInternalStates' : 0 or 1
-%   'dynamicModel' : 1,2 or 3
-%   't_out' : user-supplied vector of times that an estimate is wanted for, 
-%            either relative time or array of datetimes
-%   'unit'  : string decribing which glucose unit the y data is given in
-%
-%   y_error can be set to:
-%    - [], an empty array, to signify that limits from ISO 15197 should be used
-%    - a user supplied array of same length as y, that has the errors for
-%    individual measurements in y
-%   Default if not supplied is []
-%   
-%   The outlierRemoval parameter controls outlier removal:
-%   Measurements are considered to be outliers if the innovation is outside
-%   X std devs of the innovation variance in the forward pass Kalmanfilter
-%   If outlierRemoval==1, outlier removal is performed based on the smoothed estimate.
-%   If outlierRemoval==2, outlier removal is performed based on the filtered estimate.
-%   If outlierRemoval is any other value, outlier removal is not done
-%   Note that the smoothing approach inherently suppresses outliers if
-%   surrounding data allows
-%   Default if not supplied is 0 (no outlier removal, only suppression)
-%
-%   outlierSDlimit is a double specifying how many standard deviations of the estimate to use
-%   use when removing outliers. 2.5 would be a conservative value while 1
-%   would lead to quite aggressive outlier removal
-%   Default if not supplied is 2.5 
-%
-%   If plotResult==1, a plot will be produced showing the result of the
-%   smoothing in a new figure. If plotResult==2, the estimates from the forward pass KF
-%   will be added to the same plot.
-%   Default if not supplied is 0
-%
-%   if plotInternalStates==1, the internal states of the dynamic model in
-%   use will be plotted in a new figure.
-%   Default if not supplied is 0
-%
-%   startDateTime is a datetime defining the start 
-%   of the experiment. Allows for plotting the experiment with the datetime format.
-%   If not defined, the plot will start at 0 [min].
-%   Default if not supplied is 0
-%   
-%   if dynamicModel == 1 a simple 2-state model is used, that only
-%   describes the glucose rate of change
-%   if dynamicModel == 2 a 3-state model is used, that
-%   describes the glucose rate of change being affected by a remote
-%   compartment, which is fed by a central compartment (insulin and glucose
-%   is lumped together to one state in this model)
-%   Default if not supplied is 1
-%
-%   If unit is set to 'mg_dl' the input data (y, y_error) is assumed to be in mg/dL
-%   If set to 'mmol_l' the input data is assumed to be in mmol/L
-%   If set to 'auto', a autodetection routine is run on y that guesses
-%   which unit is used based on the values found
-%   Default if not supplied is 'auto'
-
-%TODO list for the future
-% 1) possibility to specify "no meal/insulin input" periods in the input
-% data, where a lower process noise should be used.
-
+function output=SmoothSMBGandCGMData(t_in,y_in_fp,y_in_cgm,varargin)
 %Parse the variable arguments
 parsedArgs = parseInputVarArgs(varargin);
 
 %Handle unit
 if strcmp(parsedArgs.unit,'auto')==1
-   parsedArgs.unit = autoDetectUnit(y_in);
+   parsedArgs.unit = autoDetectUnit(y_in_fp);
+   unit2 = autoDetectUnit(y_in_cgm);
+   if strcmp(parsedArgs.unit,unit2) == 0
+       error('Supplied units are not consistent for fingerpricks and CGM')
+   end
 end
 if strcmp(parsedArgs.unit,'mg_dL')==1 %This code assumes mmol/L, so convert to that and convert back at the end
-    y_in = convertTo_mmol_L(y_in);
-    parsedArgs.y_error = convertTo_mmol_L(parsedArgs.y_error);
+    y_in_fp = convertTo_mmol_L(y_in_fp);
+    y_in_cgm = convertTo_mmol_L(y_in_cgm);
+    
+    parsedArgs.y_error_fp = convertTo_mmol_L(parsedArgs.y_error_fp);
+    parsedArgs.y_error_cgm = convertTo_mmol_L(parsedArgs.y_error_cgm);
+    
+    %TODO need to handle user supplied fp error and cgm
 end
 
 %Handle time
 if isdatetime(t_in)
     %convert to relative time
     t=convertToRelativeTime(t_in, t_in(1));
-    startDateTime = t_in(1);
+    %override startDateTime
+    if(parsedArgs.startDateTime~=0)
+        disp('Warning! Overriding startDateTime since t_in was a datetime array')
+    end
+    parsedArgs.startDateTime = t_in(1);
 else
     %Assume relative time is passed in
     t=t_in;
-    startDateTime = NaN;
 end
 
-%Make input vectors dense (Remove any nan entries in y)
-nonNan = ~isnan(y_in);
-y = y_in(nonNan);
-t = t(nonNan);
+%Run smoothing on each set individually
+smoothed_fp = SmoothSMGBData(t,y_fp,'y_error',parsedArgs.y_error_fp)
+smoothed_cgm = SmoothSMGBData(t,y_cgm,'y_error',parsedArgs.y_error_cgm)
 
-delta_t = 1/6;	   %Stepping more often than every second is not recommended, nor more seldom than 1 minute
-t_i = t(1):delta_t:t(end);
 
 %Set dynamic model to use
 dynModel = setDynamicModel(parsedArgs.dynamicModel, delta_t);
-Nstates = length(dynModel.H);
+Nstates = size(dynModel.Phi,1);
 
 %Set up error to variance computation
 sdsInConfInterval = 2.5; %2 for 95% CI, 2.5 for 99% CI
 error2var = @(error) (error/sdsInConfInterval)^2; %Assumes normal distribution, and  error is given as a 99% confidence interval
-
-if length(parsedArgs.y_error)==length(y)   % Assume user supplied error estimates
-     y_error = parsedArgs.y_error;
-elseif isempty(parsedArgs.y_error)         % Empty array supplied, assume error follows ISO15197
-    y_error = setIsoError(y);
-else
-    error('Bad y_error argument supplied')    
-end
 
 output.outliers = false(size(y));
 doneFindingOutliers=false;
@@ -164,9 +85,20 @@ while ~doneFindingOutliers;
                 xBar = xHat;
                 PBar = PHat;
             end
-            dz = y(l)-dynModel.H*xBar;
+            %Switch between measurements
+            if ~isnan(y_fp(l))
+                H = dynmodel.H_fp;
+                y = y_fp;
+            elseif ~isnan(y_cgm(l))
+                H = dynmodel.H_cgm;
+                y = y_cgm;
+            else
+                error('Encountered empty measurement, should have been filtered out')
+            end
+            %TODO handle that we have both fp and cgm in the same instant
+            dz = y(l)-H*xBar;
             R = error2var(y_error(l));
-            Pz = (dynModel.H*PBar*dynModel.H'+R);
+            Pz = (H*PBar*H'+R);
             if parsedArgs.outlierRemoval == 2 
                 % Check the innovation
                 if(abs(dz)>parsedArgs.outlierSDlimit*sqrt(Pz))
@@ -182,6 +114,7 @@ while ~doneFindingOutliers;
                 measUpdateDone=1;
             end
             l=l+1;
+                
         end
         if measUpdateDone==0    % No measurement was available at this time 
             xHat=xBar;
@@ -212,8 +145,8 @@ while ~doneFindingOutliers;
         %Run through all measurements and see if any are outside the error
         %smoothed band, if so they are outliers
         foundNewOutliers = false;
-        y_s_mean  = interpolatedValuesAt(t,t_i,output.y_smoothed, startDateTime);
-        y_s_sd  = interpolatedValuesAt(t,t_i,output.y_smoothed_sd, startDateTime);
+        y_s_mean  = interpolatedValuesAt(t,t_i,output.y_smoothed, parsedArgs.startDateTime);
+        y_s_sd  = interpolatedValuesAt(t,t_i,output.y_smoothed_sd, parsedArgs.startDateTime);
         for i = 1:length(y)
             if ~output.outliers(i) && abs(y(i)-y_s_mean(i))/y_s_sd(i)>parsedArgs.outlierSDlimit
                output.outliers(i)=true;
@@ -241,23 +174,19 @@ for k = 1:length(t_i)
     output.y_filtered_sd(k) = sqrt(P_hat_f(1,1,k));
 end
 output.t_i = t_i;
-if isdatetime(startDateTime)
-    output.t_i_relative = t_i;
-    output.t_i = convertToAbsoluteTime(t_i, startDateTime);
-end
 
 output.x_filtered = x_hat_f;
 output.x_smoothed = x_smoothed;
 
 %Add user supplied wanted time
-output.y_smoothed_at_tout = interpolatedValuesAt(parsedArgs.tout,t_i,output.y_smoothed, startDateTime);
-output.y_smoothed_sd_at_tout = interpolatedValuesAt(parsedArgs.tout,t_i,output.y_smoothed_sd, startDateTime);
+output.y_smoothed_at_tout = interpolatedValuesAt(parsedArgs.tout,t_i,output.y_smoothed, parsedArgs.startDateTime);
+output.y_smoothed_sd_at_tout = interpolatedValuesAt(parsedArgs.tout,t_i,output.y_smoothed_sd, parsedArgs.startDateTime);
 
 
 %Plot if specified
-if isdatetime(startDateTime)
-    t_plot = startDateTime + minutes(t); % Convert to datetime for plotting
-    t_i_plot = startDateTime + minutes(t_i); % Convert to datetime for plotting
+if isdatetime(parsedArgs.startDateTime)
+    t_plot = parsedArgs.startDateTime + minutes(t); % Convert to datetime for plotting
+    t_i_plot = parsedArgs.startDateTime + minutes(t_i); % Convert to datetime for plotting
 else
     t_plot = t;
     t_i_plot = t_i;
@@ -318,8 +247,10 @@ function parsedArgs = parseInputVarArgs(varargs)
     parsedArgs.outlierSDlimit = 2.5;
     parsedArgs.plotResult = 0;
     parsedArgs.plotInternalStates = 0;
+    parsedArgs.startDateTime = 0;
     parsedArgs.dynamicModel = 1;
-    parsedArgs.y_error = [];
+    parsedArgs.y_error_fp = [];
+    parsedArgs.y_error_cgm = [];
     parsedArgs.tout = [];
     parsedArgs.unit = 'auto';
     
@@ -338,57 +269,31 @@ end
 
 %Helper method to set dynamic model
 function dynModel=setDynamicModel(dynModelNo,delta_t)
+    T_isf = 10;
     if(dynModelNo==1) %simple 2.order system where the rate of change of glucose dies out.
         a=-0.025;
-        qm1 = 0.01*delta_t;
-        F =[0 1;0 a];               % System matrix (continuous)
-        dynModel.Q=[0 0;0 qm1];     % Process noise covariance matrix.
-        dynModel.H=[1 0];                    % Measurement matrix.
-        dynModel.initCov = diag([0.25 1]);   % Initial covariance
+        F =[0 1 0 0;
+            0 a 0 0;
+            1/Tisf 0 -1/Tisf 0;
+            0 0 0 0];               % System matrix (continuous)
+        dynModel.Q=[0 0 0 0;
+                    0 0.02*delta_t 0 0;
+                    0 0 0 0;
+                    0 0 0 0];     % Process noise covariance matrix.
+        dynModel.H_fp=[1 0 0 0];      % Measurement matrix for fingerpricks
+        dynModel.H_fp=[0 0 1 1];      % Measurement matrix for CGM
+        dynModel.initCov = diag([0.25 1 1 1]);   % Initial covariance
         %%% Discretization
         dynModel.Phi=expm(F*delta_t);        % Discrete state transition matrix
-        dynModel.stateNames = {'Gp','dGp'};
+        dynModel.stateNames = {'Gp','dGp','Gisf','b'};
     elseif (dynModelNo==2)
         Td = 15.000; % Time constant describing flow between compartments [min]
-        qm2 = 0.02*delta_t;
         F =[0 0 1;0 -1/Td 0;0 1/Td -1/Td]; % System matrix (continuous)
-        dynModel.Q=[0 0 0;0 qm2 0;0 0 0]; % Process noise covariance matrix.
+        dynModel.Q=[0 0 0;0 0.02*delta_t 0;0 0 0]; % Process noise covariance matrix.
         dynModel.H=[1 0 0];                       % Measurement matrix.
         dynModel.initCov = diag([10 1 1]);         % Initial covariance
         dynModel.Phi=expm(F*delta_t);                    % Discrete state transition matrix
         dynModel.stateNames = {'Gp','C','R'};
-    elseif (dynModelNo==2)
-        Ti = 25.000; % Time constant describing flow between compartments [min]
-        Tm = 15.000; % Time constant describing flow between compartments [min]
-        qm3i = 0.02*delta_t;
-        qm3m = 0.02*delta_t;
-        F =[0 -1 1;0 -1/Ti 0;0 0 -1/Tm]; % System matrix (continuous)
-        dynModel.Q=[0 0 0;0 qm3i 0;0 0 qm3m]; % Process noise covariance matrix.
-        dynModel.H=[1 0 0];                        % Measurement matrix.
-        dynModel.initCov = diag([10 1 1]);         % Initial covariance
-        dynModel.Phi=expm(F*delta_t);              % Discrete state transition matrix
-        dynModel.stateNames = {'Gp','I','M'};
-    elseif (dynModelNo==4)
-        Ti = 25.000; % Time constant describing flow between compartments [min]
-        Tm = 15.000; % Time constant describing flow between compartments [min]
-        qm4i = 0.02*delta_t;
-        qm4m = 0.02*delta_t;
-        
-        F =[0 -1 0 1 0;
-            0 -1/Ti 0 0 0;
-            0 1/Ti -1/Ti 0 0;
-            0 0 0 -1/Tm 0;
-            0 0 0 1/Tm -1/Tm]; % System matrix (continuous)
-        dynModel.Q=[0 0 0 0 0;
-                    0 qm4i 0 0 0;
-                    0 0 0 0 0;
-                    0 0 0 qm4m 0;
-                    0 0 0 0 0]; % Process noise covariance matrix.
-        dynModel.H=[1 0 0];                       % Measurement matrix.
-        dynModel.initCov = diag([10 1 1]);        % Initial covariance
-        dynModel.Phi=expm(F*delta_t);             % Discrete state transition matrix
-        dynModel.stateNames = {'Gp','Ic','Ir','Mc','Mr'};
-  
     else
         error(['Unsupported model:' num2str(model)])
     end
@@ -399,14 +304,6 @@ function t = convertToRelativeTime(datetimes,startdatetime)
     t=zeros(length(datetimes),1);
     for i=1:length(datetimes)
         t(i) = minutes(datetimes(i)-startdatetime);
-    end
-end
-
-%Helper method to convert relative time to absolute time
-function datetimes = convertToAbsoluteTime(reltimes,startdatetime)
-    datetimes=datetime(zeros(length(reltimes),3));
-    for i=1:length(datetimes)
-        datetimes(i) = startdatetime + minutes(reltimes(i));
     end
 end
 
