@@ -187,6 +187,10 @@ while ~doneFindingOutliers;
             xHat=xBar;
             PHat=PBar;
         end
+        %limit to strictly positive for those states that are strictly
+        %positive
+        xHat(find(dynModel.strictlyPositiveStates & xHat<0))=0;
+        
         % Store
         x_hat_f(:,k)=xHat;
         P_hat_f(:,:,k)=PHat;
@@ -198,7 +202,10 @@ while ~doneFindingOutliers;
     for k = length(t_i)-1:-1:1
         C=P_hat_f(:,:,k)*dynModel.Phi'*inv(P_bar_f(:,:,k+1));
         x_smoothed(:,k)=x_hat_f(:,k)+C*(x_smoothed(:,k+1)-x_bar_f(:,k+1));
-        P_smoothed(:,:,k)=P_hat_f(:,:,k)+C*(P_smoothed(:,:,k+1)-P_bar_f(:,:,k+1))*C';  
+        P_smoothed(:,:,k)=P_hat_f(:,:,k)+C*(P_smoothed(:,:,k+1)-P_bar_f(:,:,k+1))*C';
+        %limit to strictly positive for those states that are strictly
+        %positive
+        x_smoothed(find(dynModel.strictlyPositiveStates & x_smoothed<0))=0;
     end
     
     %Generate output struct
@@ -290,15 +297,31 @@ if parsedArgs.plotResult>=1
 end
 
 if parsedArgs.plotInternalStates==1
-    figure()
-    subplot(2,1,1)
-    plot(t_i_plot,x_hat_f);
-    legend(dynModel.stateNames)
-    ylabel('Forward pass internal states')
-    subplot(2,1,2)
-    plot(t_i_plot,x_smoothed)
-    legend(dynModel.stateNames)
-    ylabel('Smoothed internal states')
+    figure();
+    N=length(dynModel.stateNames);
+    for sp=1:N
+        subplot(N,1,sp)
+        plot(t_i_plot,x_hat_f(sp,:));
+        hold on
+        plot(t_i_plot,x_smoothed(sp,:))
+        ylabel(dynModel.stateNames(sp))
+        legend('filtered','smoothed')
+        if sp==1
+            plot(t_plot,y,'r.','MarkerSize',15)
+            legend('filtered','smoothed','measurements')
+            if sum(output.outliers)>0
+                plot(t_plot(output.outliers),y(output.outliers),'kx','MarkerSize',15)
+                legend('filtered','smoothed','measurements','outliers')
+            end
+        else
+            if parsedArgs.dynamicModel==2
+                plot([t_plot(1) t_plot(end)],[0 0],'k-')
+                legend('filtered','smoothed','zero line')
+            end
+        end
+        hold off
+            
+    end
 end
 %Check if we need to convert back to original unit
 if strcmp(parsedArgs.unit,'mg_dL')==1
@@ -348,8 +371,9 @@ function dynModel=setDynamicModel(dynModelNo,delta_t)
         %%% Discretization
         dynModel.Phi=expm(F*delta_t);        % Discrete state transition matrix
         dynModel.stateNames = {'Gp','dGp'};
-    elseif (dynModelNo==2)
-        Td = 15.000; % Time constant describing flow between compartments [min]
+        dynModel.strictlyPositiveStates = [true;false];
+    elseif (dynModelNo==2) %Lumped insulin/meal state that is central/remote
+        Td = 15.000; % Time constant describing flow between central and remote compartments [min]
         qm2 = 0.02*delta_t;
         F =[0 0 1;0 -1/Td 0;0 1/Td -1/Td]; % System matrix (continuous)
         dynModel.Q=[0 0 0;0 qm2 0;0 0 0]; % Process noise covariance matrix.
@@ -357,20 +381,25 @@ function dynModel=setDynamicModel(dynModelNo,delta_t)
         dynModel.initCov = diag([10 1 1]);         % Initial covariance
         dynModel.Phi=expm(F*delta_t);                    % Discrete state transition matrix
         dynModel.stateNames = {'Gp','C','R'};
-    elseif (dynModelNo==2)
-        Ti = 25.000; % Time constant describing flow between compartments [min]
-        Tm = 15.000; % Time constant describing flow between compartments [min]
-        qm3i = 0.02*delta_t;
-        qm3m = 0.02*delta_t;
+        dynModel.strictlyPositiveStates = [true;false;false];
+
+    elseif (dynModelNo==3) %Insulin and meal, central
+        Ti = 25.000; % Time constant describing insulin flow between compartments [min]
+        Tm = 15.000; % Time constant describing meal flow between compartments [min]
+        qm3i = 0.001*delta_t;
+        qm3m = 0.001*delta_t;
         F =[0 -1 1;0 -1/Ti 0;0 0 -1/Tm]; % System matrix (continuous)
         dynModel.Q=[0 0 0;0 qm3i 0;0 0 qm3m]; % Process noise covariance matrix.
         dynModel.H=[1 0 0];                        % Measurement matrix.
         dynModel.initCov = diag([10 1 1]);         % Initial covariance
         dynModel.Phi=expm(F*delta_t);              % Discrete state transition matrix
         dynModel.stateNames = {'Gp','I','M'};
-    elseif (dynModelNo==4)
-        Ti = 25.000; % Time constant describing flow between compartments [min]
-        Tm = 15.000; % Time constant describing flow between compartments [min]
+        dynModel.strictlyPositiveStates = true(3,1);
+
+    elseif (dynModelNo==4) %Insulin and meal, central and remote
+        %This model is not observable
+        Ti = 25.000; % Time constant describing insulin flow between compartments [min]
+        Tm = 15.000; % Time constant describing meal flow between compartments [min]
         qm4i = 0.02*delta_t;
         qm4m = 0.02*delta_t;
         
@@ -384,11 +413,22 @@ function dynModel=setDynamicModel(dynModelNo,delta_t)
                     0 0 0 0 0;
                     0 0 0 qm4m 0;
                     0 0 0 0 0]; % Process noise covariance matrix.
-        dynModel.H=[1 0 0];                       % Measurement matrix.
-        dynModel.initCov = diag([10 1 1]);        % Initial covariance
+        dynModel.H=[1 0 0 0 0];                   % Measurement matrix.
+        dynModel.initCov = diag([10 1 1 1 1]);    % Initial covariance
         dynModel.Phi=expm(F*delta_t);             % Discrete state transition matrix
         dynModel.stateNames = {'Gp','Ic','Ir','Mc','Mr'};
-  
+        dynModel.strictlyPositiveStates = true(5,1);
+   elseif (dynModelNo==5) %Lumped insulin/meal state that is central/remote
+        Td = 15.000; % Time constant describing flow between central and remote compartments [min]
+        qm2 = 0.02*delta_t;
+        F =[0 0 1;0 -1/Td 0;0 1/Td -1/Td]; % System matrix (continuous)
+        dynModel.Q=[0 0 0;0 qm2 0;0 0 0]; % Process noise covariance matrix.
+        dynModel.H=[1 0 0];                       % Measurement matrix.
+        dynModel.initCov = diag([10 1 1]);         % Initial covariance
+        dynModel.Phi=expm(F*delta_t);                    % Discrete state transition matrix
+        dynModel.stateNames = {'Gp','C','R'};
+        dynModel.strictlyPositiveStates = [true;false;false];
+
     else
         error(['Unsupported model:' num2str(model)])
     end

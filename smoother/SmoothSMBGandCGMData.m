@@ -38,7 +38,6 @@ end
 smoothed_fp = SmoothSMGBData(t,y_fp,'y_error',parsedArgs.y_error_fp)
 smoothed_cgm = SmoothSMGBData(t,y_cgm,'y_error',parsedArgs.y_error_cgm)
 
-
 %Set dynamic model to use
 dynModel = setDynamicModel(parsedArgs.dynamicModel, delta_t);
 Nstates = size(dynModel.Phi,1);

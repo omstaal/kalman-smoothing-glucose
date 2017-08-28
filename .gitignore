@@ -2,3 +2,4 @@ div
 *.DS_store
 *.m~
 Test.m
+.R*
