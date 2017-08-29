@@ -185,7 +185,8 @@ function output=SmoothSMBGandCGMData(t_in,y_in_fp,y_in_cgm,varargin)
         plot(t_i,output.bias_filtered,'g-','DisplayName','Bias - filtered')
         plot(t_i,output.bias_filtered-2.5*output.bias_filtered_sd,'g--','DisplayName','Bias variance')
         plot(t_i,output.bias_filtered+2.5*output.bias_filtered_sd,'g--')
-        
+        ylabel('Bias','FontWeight','bold','FontSize',12);
+       
         ylim([-3 3])
     end   
 
@@ -216,7 +217,7 @@ end
 %Helper method to augment dynamic model with states needed for CGM dynamics
 %estimation (add bias and 
 function dynModel=augmentDynamicModel(dynModelIn)
-    T_isf = 5;
+    T_isf = 10;
     Nin = size(dynModelIn.F,1);
     Naug = 2;
     Ntot = Naug+Nin;
