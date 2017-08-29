@@ -84,7 +84,7 @@ parsedArgs = parseInputVarArgs(varargin);
 
 %Handle unit
 if strcmp(parsedArgs.unit,'auto')==1
-   parsedArgs.unit = autoDetectUnit(y_in);
+   parsedArgs.unit = autoDetectGlucoseUnit(y_in);
 end
 if strcmp(parsedArgs.unit,'mg_dL')==1 %This code assumes mmol/L, so convert to that and convert back at the end
     y_in = convertTo_mmol_L(y_in);
@@ -94,24 +94,37 @@ end
 %Handle time
 if isdatetime(t_in)
     %convert to relative time
-    t=convertToRelativeTime(t_in, t_in(1));
     startDateTime = t_in(1);
+    t_in=convertToRelativeTime(t_in, startDateTime);
 else
     %Assume relative time is passed in
-    t=t_in;
     startDateTime = NaN;
 end
+
+%Set up interploation/stepping at 10 sec
+delta_t = 1/6;	   %Stepping more often than every second is not recommended, nor more seldom than 1 minute
+
+%Interpolated time vector
+t_i = t_in(1):delta_t:t_in(end);
+
 
 %Make input vectors dense (Remove any nan entries in y)
 nonNan = ~isnan(y_in);
 y = y_in(nonNan);
-t = t(nonNan);
+t = t_in(nonNan);
+t_i_first = find(t_i>=t(1), 1);
+t_i_last = find(t_i<=t(end), 1, 'last');
+if t_i_last<length(t_i) 
+    t_i_last = t_i_last+1;
+end
+t_i_valid = t_i(t_i_first:t_i_last);
+%disp(['Smoothing between ' num2str(t_i_valid(1)) ' and ' num2str(t_i_valid(end))])
 
-delta_t = 1/6;	   %Stepping more often than every second is not recommended, nor more seldom than 1 minute
-t_i = t(1):delta_t:t(end);
 
+output.delta_t = delta_t;
 %Set dynamic model to use
 dynModel = setDynamicModel(parsedArgs.dynamicModel, delta_t);
+output.dynModelCGMmerge = dynModel;
 Nstates = length(dynModel.H);
 
 %Set up error to variance computation
@@ -129,14 +142,14 @@ end
 output.outliers = false(size(y));
 doneFindingOutliers=false;
 
-while ~doneFindingOutliers;
+while ~doneFindingOutliers
     %%% Storage
-    x_hat_f = zeros(Nstates,length(t_i));         % A priori state vector storage, forward pass
-    x_bar_f = zeros(Nstates,length(t_i));         % A posteriori state vector storage, forward pass
-    P_hat_f = zeros(Nstates,Nstates,length(t_i));       % A priori covariance matrix storage, forward pass
-    P_bar_f = zeros(Nstates,Nstates,length(t_i));       % A posteriori covariance matrix storage, forward pass
-    x_smoothed = zeros(Nstates,length(t_i));            % State vector storage, backward pass
-    P_smoothed = zeros(Nstates,Nstates,length(t_i));    % Covariance matrix storage, backward pass
+    x_hat_f = zeros(Nstates,length(t_i_valid));         % A priori state vector storage, forward pass
+    x_bar_f = zeros(Nstates,length(t_i_valid));         % A posteriori state vector storage, forward pass
+    P_hat_f = zeros(Nstates,Nstates,length(t_i_valid));       % A priori covariance matrix storage, forward pass
+    P_bar_f = zeros(Nstates,Nstates,length(t_i_valid));       % A posteriori covariance matrix storage, forward pass
+    x_smoothed = zeros(Nstates,length(t_i_valid));            % State vector storage, backward pass
+    P_smoothed = zeros(Nstates,Nstates,length(t_i_valid));    % Covariance matrix storage, backward pass
 
     %%% Initialization
     xBar = zeros(Nstates,1);
@@ -146,7 +159,7 @@ while ~doneFindingOutliers;
     PHat=PBar;
     l=1;
     %%% Kalman filter forward pass
-    for k = 1:length(t_i)
+    for k = 1:length(t_i_valid)
         %TU - Time update
         xBar = dynModel.Phi*xHat;
         PBar = dynModel.Phi*PHat*dynModel.Phi' + dynModel.Q;
@@ -156,7 +169,7 @@ while ~doneFindingOutliers;
 
         measUpdateDone=0;
         %MU - Measurement Update only when we have a measurement
-        while length(t)>=l && t_i(k)>=t(l)  % Interpolated time has passed one 
+        while length(t)>=l && t_i_valid(k)>=t(l)  % Interpolated time has passed one 
                                             % of the measurement times, process
                                             % all measurements that has occurred
             if measUpdateDone==1
@@ -189,7 +202,7 @@ while ~doneFindingOutliers;
         end
         %limit to strictly positive for those states that are strictly
         %positive
-        xHat(find(dynModel.strictlyPositiveStates & xHat<0))=0;
+        xHat(dynModel.strictlyPositiveStates & xHat<0)=0;
         
         % Store
         x_hat_f(:,k)=xHat;
@@ -199,28 +212,29 @@ while ~doneFindingOutliers;
     %%% Rauch-Tung-Striebel backward pass
     x_smoothed(:,k)=xHat;
     P_smoothed(:,:,k)=PHat;
-    for k = length(t_i)-1:-1:1
+    for k = length(t_i_valid)-1:-1:1
         C=P_hat_f(:,:,k)*dynModel.Phi'*inv(P_bar_f(:,:,k+1));
         x_smoothed(:,k)=x_hat_f(:,k)+C*(x_smoothed(:,k+1)-x_bar_f(:,k+1));
         P_smoothed(:,:,k)=P_hat_f(:,:,k)+C*(P_smoothed(:,:,k+1)-P_bar_f(:,:,k+1))*C';
         %limit to strictly positive for those states that are strictly
         %positive
-        x_smoothed(find(dynModel.strictlyPositiveStates & x_smoothed<0))=0;
+        x_smoothed(dynModel.strictlyPositiveStates & x_smoothed<0)=0;
     end
     
     %Generate output struct
-    output.y_smoothed = x_smoothed(1,:);
-    output.y_smoothed_sd = zeros(size(output.y_smoothed));
-    for k = 1:length(t_i)
-        output.y_smoothed_sd(k) = sqrt(P_smoothed(1,1,k));
+    output.y_smoothed = nan(size(t_i));
+    output.y_smoothed_sd = nan(size(t_i));
+    output.y_smoothed(t_i_first:t_i_last) = x_smoothed(1,:);
+    for k = 1:length(t_i_valid)
+        output.y_smoothed_sd(t_i_first-1+k) = sqrt(P_smoothed(1,1,k));
     end
     
     if parsedArgs.outlierRemoval == 1
         %Run through all measurements and see if any are outside the error
         %smoothed band, if so they are outliers
         foundNewOutliers = false;
-        y_s_mean  = interpolatedValuesAt(t,t_i,output.y_smoothed, startDateTime);
-        y_s_sd  = interpolatedValuesAt(t,t_i,output.y_smoothed_sd, startDateTime);
+        y_s_mean  = closestValues(t,t_i,output.y_smoothed, startDateTime);
+        y_s_sd  = closestValues(t,t_i,output.y_smoothed_sd, startDateTime);
         for i = 1:length(y)
             if ~output.outliers(i) && abs(y(i)-y_s_mean(i))/y_s_sd(i)>parsedArgs.outlierSDlimit
                output.outliers(i)=true;
@@ -241,11 +255,12 @@ end %while not doneFindingOutliers
 %Smoothing done
 
 
-
-output.y_filtered = x_hat_f(1,:);
-output.y_filtered_sd = zeros(size(output.y_filtered));
-for k = 1:length(t_i)
-    output.y_filtered_sd(k) = sqrt(P_hat_f(1,1,k));
+output.y_filtered = nan(size(t_i));
+output.y_filtered_sd = nan(size(t_i));
+    
+output.y_filtered(t_i_first:t_i_last) = x_hat_f(1,:);
+for k = 1:length(t_i_valid)
+    output.y_filtered_sd(t_i_first-1+k) = sqrt(P_hat_f(1,1,k));
 end
 output.t_i = t_i;
 if isdatetime(startDateTime)
@@ -253,13 +268,18 @@ if isdatetime(startDateTime)
     output.t_i = convertToAbsoluteTime(t_i, startDateTime);
 end
 
-output.x_filtered = x_hat_f;
-output.x_smoothed = x_smoothed;
+%Add internal states
+output.x_filtered = nan(size(x_hat_f,1),size(t_i,2));
+output.x_smoothed = nan(size(x_smoothed,1),size(t_i,2));
+output.x_filtered(:,t_i_first:t_i_last) = x_hat_f;
+output.x_smoothed(:,t_i_first:t_i_last) = x_smoothed;
 
-%Add user supplied wanted time
-output.y_smoothed_at_tout = interpolatedValuesAt(parsedArgs.tout,t_i,output.y_smoothed, startDateTime);
-output.y_smoothed_sd_at_tout = interpolatedValuesAt(parsedArgs.tout,t_i,output.y_smoothed_sd, startDateTime);
+%Add user supplied wanted times
+output.y_smoothed_at_tout = closestValues(parsedArgs.tout,t_i,output.y_smoothed, startDateTime);
+output.y_smoothed_sd_at_tout = closestValues(parsedArgs.tout,t_i,output.y_smoothed_sd, startDateTime);
 
+%Add dynModel
+output.dynModel = dynModel;
 
 %Plot if specified
 if isdatetime(startDateTime)
@@ -274,8 +294,8 @@ end
 if parsedArgs.plotResult>=1
     figure()
     
-    %h1 = errorbar(t_plot,y,y_error,'r.','MarkerSize',10,'LineWidth',1); % Using 2 sigma
-    h1 = plot(t_plot,y,'r.','MarkerSize',10); % Using 2 sigma
+    %h1 = errorbar(t_plot,y,y_error,'r.','MarkerSize',10,'LineWidth',1); 
+    h1 = plot(t_plot,y,'r.','MarkerSize',10); 
     
     hold on
     h2 = plot(t_i_plot,output.y_smoothed,'b','LineWidth',2);
@@ -307,6 +327,7 @@ if parsedArgs.plotInternalStates==1
         ylabel(dynModel.stateNames(sp))
         legend('filtered','smoothed')
         if sp==1
+            title(['Internal states model ' num2str(dynModel.id)])
             plot(t_plot,y,'r.','MarkerSize',15)
             legend('filtered','smoothed','measurements')
             if sum(output.outliers)>0
@@ -332,7 +353,7 @@ if strcmp(parsedArgs.unit,'mg_dL')==1
     output.y_smoothed_at_tout = convertTo_mg_dL(output.y_smoothed_at_tout);
     output.y_smoothed_sd_at_tout = convertTo_mg_dL(output.y_smoothed_sd_at_tout);
 end
-end%function SmoothGlucoseData
+end%function 
 
 %Helper method to parse the arguments
 function parsedArgs = parseInputVarArgs(varargs)
@@ -361,143 +382,56 @@ end
 
 %Helper method to set dynamic model
 function dynModel=setDynamicModel(dynModelNo,delta_t)
+    dynModel.delta_t=delta_t;
     if(dynModelNo==1) %simple 2.order system where the rate of change of glucose dies out.
+        dynModel.id=1;
         a=-0.025;
         qm1 = 0.01*delta_t;
-        F =[0 1;0 a];               % System matrix (continuous)
+        dynModel.F =[0 1;0 a];               % System matrix (continuous)
         dynModel.Q=[0 0;0 qm1];     % Process noise covariance matrix.
         dynModel.H=[1 0];                    % Measurement matrix.
         dynModel.initCov = diag([0.25 1]);   % Initial covariance
         %%% Discretization
-        dynModel.Phi=expm(F*delta_t);        % Discrete state transition matrix
+        dynModel.Phi=expm(dynModel.F*delta_t);        % Discrete state transition matrix
         dynModel.stateNames = {'Gp','dGp'};
         dynModel.strictlyPositiveStates = [true;false];
     elseif (dynModelNo==2) %Lumped insulin/meal state that is central/remote
+        dynModel.id = 2;
         Td = 15.000; % Time constant describing flow between central and remote compartments [min]
         qm2 = 0.02*delta_t;
-        F =[0 0 1;0 -1/Td 0;0 1/Td -1/Td]; % System matrix (continuous)
+        dynModel.F =[0 0 1;0 -1/Td 0;0 1/Td -1/Td]; % System matrix (continuous)
         dynModel.Q=[0 0 0;0 qm2 0;0 0 0]; % Process noise covariance matrix.
         dynModel.H=[1 0 0];                       % Measurement matrix.
         dynModel.initCov = diag([10 1 1]);         % Initial covariance
-        dynModel.Phi=expm(F*delta_t);                    % Discrete state transition matrix
+        dynModel.Phi=expm(dynModel.F*delta_t);                    % Discrete state transition matrix
         dynModel.stateNames = {'Gp','C','R'};
         dynModel.strictlyPositiveStates = [true;false;false];
-
     elseif (dynModelNo==3) %Insulin and meal, central
-        Ti = 25.000; % Time constant describing insulin flow between compartments [min]
-        Tm = 15.000; % Time constant describing meal flow between compartments [min]
-        qm3i = 0.001*delta_t;
-        qm3m = 0.001*delta_t;
-        F =[0 -1 1;0 -1/Ti 0;0 0 -1/Tm]; % System matrix (continuous)
+        dynModel.id = 3;
+        Ti = 20.000; % Time constant describing insulin flow between compartments [min]
+        Tm = 10.000; % Time constant describing meal flow between compartments [min]
+        qm3i = 0.01*delta_t;
+        qm3m = 0.01*delta_t;
+        dynModel.F =[0 -1 1;0 -1/Ti 0;0 0 -1/Tm]; % System matrix (continuous)
         dynModel.Q=[0 0 0;0 qm3i 0;0 0 qm3m]; % Process noise covariance matrix.
         dynModel.H=[1 0 0];                        % Measurement matrix.
         dynModel.initCov = diag([10 1 1]);         % Initial covariance
-        dynModel.Phi=expm(F*delta_t);              % Discrete state transition matrix
+        dynModel.Phi=expm(dynModel.F*delta_t);              % Discrete state transition matrix
         dynModel.stateNames = {'Gp','I','M'};
         dynModel.strictlyPositiveStates = true(3,1);
-
-    elseif (dynModelNo==4) %Insulin and meal, central and remote
-        %This model is not observable
-        Ti = 25.000; % Time constant describing insulin flow between compartments [min]
-        Tm = 15.000; % Time constant describing meal flow between compartments [min]
-        qm4i = 0.02*delta_t;
-        qm4m = 0.02*delta_t;
-        
-        F =[0 -1 0 1 0;
-            0 -1/Ti 0 0 0;
-            0 1/Ti -1/Ti 0 0;
-            0 0 0 -1/Tm 0;
-            0 0 0 1/Tm -1/Tm]; % System matrix (continuous)
-        dynModel.Q=[0 0 0 0 0;
-                    0 qm4i 0 0 0;
-                    0 0 0 0 0;
-                    0 0 0 qm4m 0;
-                    0 0 0 0 0]; % Process noise covariance matrix.
-        dynModel.H=[1 0 0 0 0];                   % Measurement matrix.
-        dynModel.initCov = diag([10 1 1 1 1]);    % Initial covariance
-        dynModel.Phi=expm(F*delta_t);             % Discrete state transition matrix
-        dynModel.stateNames = {'Gp','Ic','Ir','Mc','Mr'};
-        dynModel.strictlyPositiveStates = true(5,1);
-   elseif (dynModelNo==5) %Lumped insulin/meal state that is central/remote
-        Td = 15.000; % Time constant describing flow between central and remote compartments [min]
-        qm2 = 0.02*delta_t;
-        F =[0 0 1;0 -1/Td 0;0 1/Td -1/Td]; % System matrix (continuous)
-        dynModel.Q=[0 0 0;0 qm2 0;0 0 0]; % Process noise covariance matrix.
-        dynModel.H=[1 0 0];                       % Measurement matrix.
-        dynModel.initCov = diag([10 1 1]);         % Initial covariance
-        dynModel.Phi=expm(F*delta_t);                    % Discrete state transition matrix
-        dynModel.stateNames = {'Gp','C','R'};
-        dynModel.strictlyPositiveStates = [true;false;false];
-
     else
         error(['Unsupported model:' num2str(model)])
     end
-end
-
-%Helper method to convert datetimes to relative time
-function t = convertToRelativeTime(datetimes,startdatetime)
-    t=zeros(length(datetimes),1);
-    for i=1:length(datetimes)
-        t(i) = minutes(datetimes(i)-startdatetime);
+    
+    if ~rank(obsv(dynModel.F,dynModel.H))==size(dynModel.F,1)
+        error('System is not observable')
     end
 end
 
-%Helper method to convert relative time to absolute time
-function datetimes = convertToAbsoluteTime(reltimes,startdatetime)
-    datetimes=datetime(zeros(length(reltimes),3));
-    for i=1:length(datetimes)
-        datetimes(i) = startdatetime + minutes(reltimes(i));
-    end
-end
 
-%Helper method to convert glucose unit from mmol/L to mg/dL
-function y_mgdL = convertTo_mg_dL(y_mmolL)
-    y_mgdL = y_mmolL*18.018;
-end
 
-%Helper method to convert glucose unit from mg/dL to mmol/dL
-function y_mmolL = convertTo_mmol_L(y_mgdL)
-    y_mmolL = y_mgdL/18.018;
-end
 
-%Helper method that guesses a error based on the measured value, based on ISO 15197 
-function y_error = setIsoError(y)
-    y_error = zeros(size(y));              % ISO 15197, set it based on the measured values
-    for i = 1:length(y) % Make error bars (assumes fingerprick measurement
-                        % errors according to ISO15197)
-        if y(i)>5.6
-            y_error(i) = 0.2*y(i);
-        else
-            y_error(i) = 0.83;
-        end
-    end
-end
 
-%Helper function to find closest to wanted output times
-function yout = interpolatedValuesAt(tout, t, y, startdatetime)
-    if isdatetime(tout)
-        tout = convertToRelativeTime(tout, startdatetime);
-    end
-    yout = zeros(size(tout));
-    for i = 1:length(tout)
-        if tout(i)>t(end) || tout(i)<t(1)
-            yout(i) = NaN;
-        else
-            for j=1:length(t)
-                if t(j)>=tout(i)
-                    yout(i) = y(j);
-                    break;
-                end
-            end
-        end
-    end
-end
 
-%Helper function to autodetect glucose unit
-function unit = autoDetectUnit(measurements)
-    unit = 'mmol_L';
-    if mean(measurements)>50
-        disp('SmoothGlucoseData autodetected mg/dL as unit')
-        unit = 'mg_dL';
-    end
-end
+
+
