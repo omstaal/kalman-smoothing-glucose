@@ -131,15 +131,21 @@ function output=SmoothSMBGandCGMData(t_in,y_in_fp,y_in_cgm,varargin)
     output.y_cgm_smoothed_sd = nan(size(t_i));
     output.bias_smoothed = nan(size(t_i));
     output.bias_smoothed_sd = nan(size(t_i));
+    
+    output.bias_filtered = nan(size(t_i));
+    output.bias_filtered_sd = nan(size(t_i));
 
     output.y_fp_smoothed(startk:endk) = x_smoothed(1,startk:endk);
     output.y_cgm_smoothed(startk:endk) = x_smoothed(Nstates,startk:endk);
     output.bias_smoothed(startk:endk) = x_smoothed(Nstates-1,startk:endk);
+    output.bias_filtered(startk:endk) = x_hat_f(Nstates-1,startk:endk);
 
     for k = startk:endk
         output.y_fp_smoothed_sd(k) = sqrt(P_smoothed(1,1,k));
         output.y_cgm_smoothed_sd(k) = sqrt(P_smoothed(Nstates,Nstates,k));
         output.bias_smoothed_sd(k) = sqrt(P_smoothed(Nstates-1,Nstates-1,k));
+        output.bias_filtered_sd(k) = sqrt(P_hat_f(Nstates-1,Nstates-1,k));
+        
     end 
 
     output.t_i = t_i;
@@ -158,7 +164,6 @@ function output=SmoothSMBGandCGMData(t_in,y_in_fp,y_in_cgm,varargin)
 
      %debug plotting
     if true
-        figure()
         subplot(2,1,1)
         plot(t_in,y_in_fp,'r.','DisplayName','Fingerpricks')
         hold on;
@@ -173,10 +178,14 @@ function output=SmoothSMBGandCGMData(t_in,y_in_fp,y_in_cgm,varargin)
         ylabel('Glucose [mmol/L]','FontWeight','bold','FontSize',12);
         title('Smoothing CGM and SMBG')
         subplot(2,1,2)
-        plot(t_i,output.bias_smoothed,'r-','DisplayName','Bias')
+        plot(t_i,output.bias_smoothed,'r-','DisplayName','Bias - smoothed')
         hold on;
         plot(t_i,output.bias_smoothed-2.5*output.bias_smoothed_sd,'r--','DisplayName','Bias variance')
         plot(t_i,output.bias_smoothed+2.5*output.bias_smoothed_sd,'r--')
+        plot(t_i,output.bias_filtered,'g-','DisplayName','Bias - filtered')
+        plot(t_i,output.bias_filtered-2.5*output.bias_filtered_sd,'g--','DisplayName','Bias variance')
+        plot(t_i,output.bias_filtered+2.5*output.bias_filtered_sd,'g--')
+        
         ylim([-3 3])
     end   
 
@@ -207,7 +216,7 @@ end
 %Helper method to augment dynamic model with states needed for CGM dynamics
 %estimation (add bias and 
 function dynModel=augmentDynamicModel(dynModelIn)
-    T_isf = 10;
+    T_isf = 5;
     Nin = size(dynModelIn.F,1);
     Naug = 2;
     Ntot = Naug+Nin;
