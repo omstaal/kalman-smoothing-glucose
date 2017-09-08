@@ -124,7 +124,6 @@ t_i_valid = t_i(t_i_first:t_i_last);
 output.delta_t = delta_t;
 %Set dynamic model to use
 dynModel = setDynamicModel(parsedArgs.dynamicModel, delta_t);
-output.dynModelCGMmerge = dynModel;
 Nstates = length(dynModel.H);
 
 %Set up error to variance computation
@@ -275,6 +274,9 @@ output.x_filtered(:,t_i_first:t_i_last) = x_hat_f;
 output.x_smoothed(:,t_i_first:t_i_last) = x_smoothed;
 
 %Add user supplied wanted times
+if length(parsedArgs.tout)==0
+    parsedArgs.tout = t_in;
+end
 output.y_smoothed_at_tout = closestValues(parsedArgs.tout,t_i,output.y_smoothed, startDateTime);
 output.y_smoothed_sd_at_tout = closestValues(parsedArgs.tout,t_i,output.y_smoothed_sd, startDateTime);
 

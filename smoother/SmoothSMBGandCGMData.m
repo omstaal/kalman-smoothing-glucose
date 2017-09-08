@@ -163,7 +163,7 @@ function output=SmoothSMBGandCGMData(t_in,y_in_fp,y_in_cgm,varargin)
     output.y_cgm_corrected_sd_at_tout = closestValues(parsedArgs.tout,t_i,output.y_cgm_smoothed_sd, startDateTime);
 
      %debug plotting
-    if true
+    if false
         subplot(2,1,1)
         plot(t_in,y_in_fp,'r.','DisplayName','Fingerpricks')
         hold on;
@@ -217,7 +217,7 @@ end
 %Helper method to augment dynamic model with states needed for CGM dynamics
 %estimation (add bias and 
 function dynModel=augmentDynamicModel(dynModelIn)
-    T_isf = 10;
+    T_isf = 20;
     Nin = size(dynModelIn.F,1);
     Naug = 2;
     Ntot = Naug+Nin;
