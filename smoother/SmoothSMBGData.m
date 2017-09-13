@@ -212,7 +212,7 @@ while ~doneFindingOutliers
     x_smoothed(:,k)=xHat;
     P_smoothed(:,:,k)=PHat;
     for k = length(t_i_valid)-1:-1:1
-        C=P_hat_f(:,:,k)*dynModel.Phi'*inv(P_bar_f(:,:,k+1));
+        C=(P_hat_f(:,:,k)*dynModel.Phi')/P_bar_f(:,:,k+1);
         x_smoothed(:,k)=x_hat_f(:,k)+C*(x_smoothed(:,k+1)-x_bar_f(:,k+1));
         P_smoothed(:,:,k)=P_hat_f(:,:,k)+C*(P_smoothed(:,:,k+1)-P_bar_f(:,:,k+1))*C';
         %limit to strictly positive for those states that are strictly
