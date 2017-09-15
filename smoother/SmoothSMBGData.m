@@ -101,12 +101,13 @@ else
     startDateTime = NaN;
 end
 
-%Set up interploation/stepping at 10 sec
-delta_t = 1/6;	   %Stepping more often than every second is not recommended, nor more seldom than 1 minute
+%Set dynamic model to use
+dynModel = setDynamicModel(parsedArgs.dynamicModel);
+output.delta_t = dynModel.delta_t;
+Nstates = length(dynModel.H);
 
 %Interpolated time vector
-t_i = t_in(1):delta_t:t_in(end);
-
+t_i = t_in(1):dynModel.delta_t:t_in(end);
 
 %Make input vectors dense (Remove any nan entries in y)
 nonNan = ~isnan(y_in);
@@ -120,11 +121,6 @@ end
 t_i_valid = t_i(t_i_first:t_i_last);
 %disp(['Smoothing between ' num2str(t_i_valid(1)) ' and ' num2str(t_i_valid(end))])
 
-
-output.delta_t = delta_t;
-%Set dynamic model to use
-dynModel = setDynamicModel(parsedArgs.dynamicModel, delta_t);
-Nstates = length(dynModel.H);
 
 %Set up error to variance computation
 sdsInConfInterval = 2.5; %2 for 95% CI, 2.5 for 99% CI
@@ -361,7 +357,7 @@ end%function
 function parsedArgs = parseInputVarArgs(varargs)
     %Set defaults
     parsedArgs.outlierRemoval = 0;
-    parsedArgs.outlierSDlimit = 2.5;
+    parsedArgs.outlierSDlimit = 2;
     parsedArgs.plotResult = 0;
     parsedArgs.plotInternalStates = 0;
     parsedArgs.dynamicModel = 1;
@@ -382,53 +378,6 @@ function parsedArgs = parseInputVarArgs(varargs)
     end
 end
 
-%Helper method to set dynamic model
-function dynModel=setDynamicModel(dynModelNo,delta_t)
-    dynModel.delta_t=delta_t;
-    if(dynModelNo==1) %simple 2.order system where the rate of change of glucose dies out.
-        dynModel.id=1;
-        a=-0.025;
-        qm1 = 0.01*delta_t;
-        dynModel.F =[0 1;0 a];               % System matrix (continuous)
-        dynModel.Q=[0 0;0 qm1];     % Process noise covariance matrix.
-        dynModel.H=[1 0];                    % Measurement matrix.
-        dynModel.initCov = diag([0.25 1]);   % Initial covariance
-        %%% Discretization
-        dynModel.Phi=expm(dynModel.F*delta_t);        % Discrete state transition matrix
-        dynModel.stateNames = {'Gp','dGp'};
-        dynModel.strictlyPositiveStates = [true;false];
-    elseif (dynModelNo==2) %Lumped insulin/meal state that is central/remote
-        dynModel.id = 2;
-        Td = 15.000; % Time constant describing flow between central and remote compartments [min]
-        qm2 = 0.02*delta_t;
-        dynModel.F =[0 0 1;0 -1/Td 0;0 1/Td -1/Td]; % System matrix (continuous)
-        dynModel.Q=[0 0 0;0 qm2 0;0 0 0]; % Process noise covariance matrix.
-        dynModel.H=[1 0 0];                       % Measurement matrix.
-        dynModel.initCov = diag([10 1 1]);         % Initial covariance
-        dynModel.Phi=expm(dynModel.F*delta_t);                    % Discrete state transition matrix
-        dynModel.stateNames = {'Gp','C','R'};
-        dynModel.strictlyPositiveStates = [true;false;false];
-    elseif (dynModelNo==3) %Insulin and meal, central
-        dynModel.id = 3;
-        Ti = 20.000; % Time constant describing insulin flow between compartments [min]
-        Tm = 10.000; % Time constant describing meal flow between compartments [min]
-        qm3i = 0.01*delta_t;
-        qm3m = 0.01*delta_t;
-        dynModel.F =[0 -1 1;0 -1/Ti 0;0 0 -1/Tm]; % System matrix (continuous)
-        dynModel.Q=[0 0 0;0 qm3i 0;0 0 qm3m]; % Process noise covariance matrix.
-        dynModel.H=[1 0 0];                        % Measurement matrix.
-        dynModel.initCov = diag([10 1 1]);         % Initial covariance
-        dynModel.Phi=expm(dynModel.F*delta_t);              % Discrete state transition matrix
-        dynModel.stateNames = {'Gp','I','M'};
-        dynModel.strictlyPositiveStates = true(3,1);
-    else
-        error(['Unsupported model:' num2str(model)])
-    end
-    
-    if ~rank(obsv(dynModel.F,dynModel.H))==size(dynModel.F,1)
-        error('System is not observable')
-    end
-end
 
 
 

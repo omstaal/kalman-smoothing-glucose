@@ -1,5 +1,5 @@
 function output=SmoothSMBGandCGMData(t_in,y_in_fp,y_in_cgm,varargin)
-
+    
     %Parse the variable arguments
     parsedArgs = parseInputVarArgs(varargin);
     
@@ -24,23 +24,17 @@ function output=SmoothSMBGandCGMData(t_in,y_in_fp,y_in_cgm,varargin)
         startDateTime = NaN;
     end
 
-    if parsedArgs.presmooth
-        %Run smoothing on each set individually
-        output.smoothed_fp = SmoothSMBGData(t_in,y_in_fp,'outlierRemoval',1,'dynamicModel',2);
-        output.smoothed_cgm = SmoothSMBGData(t_in,y_in_cgm,'outlierRemoval',1,'dynamicModel',2);
-        t_i = output.smoothed_fp.t_i;
-        y_fp = output.smoothed_fp.y_smoothed;
-        var_fp = output.smoothed_fp.y_smoothed_sd.^2;
-        y_cgm = output.smoothed_cgm.y_smoothed;
-        var_cgm = output.smoothed_cgm.y_smoothed_sd.^2;
-        %Set dynamic model to use for CGM SMBG fusion
-        dynModel = augmentDynamicModelBiasAndLag(output.smoothed_fp.dynModel);
-        Nstates = size(dynModel.Phi,1);
-    else
-        error('TODO implement no presmooth')
-    end
-    
-    useBiasStartGuess = true;
+    %Run smoothing on each set individually
+    output.smoothed_fp = SmoothSMBGData(t_in,y_in_fp,'outlierRemoval',parsedArgs.outlierRemoval,'dynamicModel',parsedArgs.dynamicModel);
+    output.smoothed_cgm = SmoothSMBGData(t_in,y_in_cgm,'outlierRemoval',parsedArgs.outlierRemoval,'dynamicModel',parsedArgs.dynamicModel);
+    t_i = output.smoothed_fp.t_i;
+    y_fp = output.smoothed_fp.y_smoothed;
+    var_fp = output.smoothed_fp.y_smoothed_sd.^2;
+    y_cgm = output.smoothed_cgm.y_smoothed;
+    var_cgm = output.smoothed_cgm.y_smoothed_sd.^2;
+    %Set dynamic model to use for CGM SMBG fusion
+    dynModel = augmentDynamicModelBiasAndLag(output.smoothed_fp.dynModel);
+    Nstates = size(dynModel.Phi,1);
     
     %%% Storage
     x_hat_f = nan(Nstates,length(t_i));         % A priori state vector storage, forward pass
@@ -52,6 +46,9 @@ function output=SmoothSMBGandCGMData(t_in,y_in_fp,y_in_cgm,varargin)
     Phis = nan(Nstates,Nstates,length(t_i));    
     PhiEKFs = nan(Nstates,Nstates,length(t_i));    
     
+    mink = 1/30;
+    maxk = 10;
+    
     init = false;
     endk = nan;
     for k = 1:length(t_i)
@@ -61,22 +58,29 @@ function output=SmoothSMBGandCGMData(t_in,y_in_fp,y_in_cgm,varargin)
                 xBar = zeros(Nstates,1);
                 xBar(1)=y_fp(k);
                 xBar(dynModel.Nin+1)=y_fp(k); %NB - the state is not set equal to the first CGM measurement, due to bias
-                if(useBiasStartGuess)
-                    %xBar(dynModel.Nin+2)=y_cgm(k)-y_fp(k);%Start guess on the bias - first sample
-                    %xBar(dynModel.Nin+2)=mean(y_cgm-y_fp,'omitnan');%Start guess on the bias - mean difference
-                    xBar(dynModel.Nin+2)=(y_cgm(k)-y_fp(k)+ mean(y_cgm-y_fp,'omitnan') )/2;%Start guess on the bias - mean between 
-                   
-                    %disp(sprintf('Used guess for bias: %f', xBar(dynModel.Nin+2)));%Start guess on the bias
-                    
-                    %The guess needs to be computed in a different way if
-                    %fingerpricks are sparse (only look at the CGM
-                    %measurements close to the FPs
+                switch parsedArgs.biasStartGuess
+                    case 0
+                        xBar(dynModel.Nin+2)=0;
+                        dynModel.initCov(dynModel.Nin+2,dynModel.Nin+2)=1;%If we do not use the data
+                    case 1 
+                        xBar(dynModel.Nin+2)=y_cgm(k)-y_fp(k);%Start guess on the bias - first sample difference
+                    case 2
+                        xBar(dynModel.Nin+2)=mean(y_cgm-y_fp,'omitnan');%Start guess on the bias - mean difference
+                    case 3
+                        xBar(dynModel.Nin+2)=(y_cgm(k)-y_fp(k)+ mean(y_cgm-y_fp,'omitnan') )/2;%Start guess on the bias - mean between start and mean
                 end
+                disp(sprintf('Used guess for bias: %f', xBar(dynModel.Nin+2)));%Start guess on the bias
+                    
+                %The guess needs to be computed in a different way if
+                %fingerpricks are sparse (only look at the CGM
+                %measurements close to the FPs
+                
                 
                 xBar(dynModel.Nin+3)=dynModel.k_default;
 
                 xHat=xBar;
                 PBar=dynModel.initCov;
+                
                 PHat=PBar;
                 init = true;
                 startk = k;
@@ -124,19 +128,26 @@ function output=SmoothSMBGandCGMData(t_in,y_in_fp,y_in_cgm,varargin)
             %Measurement update
             K=PBar*H'/Pz;
             xHat = xBar + K*dz;
-            PHat = (eye(size(PBar))-K*H)*PBar;
-            [~,p] = chol(PHat);
-            if p~=0
-                disp(sprintf('Warning - filtering aborted at t = %f due to non-posdef covmatrix',t_i(k)))
-                break
+            %PHat = (eye(size(PBar))-K*H)*PBar;
+            hlp = (eye(size(PBar))-K*H);
+            PHat = hlp*PBar*hlp' + K*R*K';
+            
+            
+             [~,p] = chol(PHat);
+             if p~=0
+                 error(sprintf('Phat not pos def at k=%d',k))
+             end
+            if ~issymmetric(PHat)
+                PHat = (PHat+PHat')/2; %Make symmetric
             end
-            if xHat(end)>10
+
+            if xHat(end)>maxk
                 %disp(sprintf('Warning - k estimated to %f in time step %d',xHat(end),k))
-                xHat(end)=10;
+                xHat(end)=maxk;
             end
-            if xHat(end)<0.01
+            if xHat(end)<mink
                 %disp(sprintf('Warning - k estimated to %f in time step %d',xHat(end),k))
-                xHat(end)=0.01;
+                xHat(end)=mink;
             end
             % Store
             x_hat_f(:,k)=xHat;
@@ -150,7 +161,8 @@ function output=SmoothSMBGandCGMData(t_in,y_in_fp,y_in_cgm,varargin)
     %%% Rauch-Tung-Striebel backward pass
     x_smoothed(:,endk)=xHat;
     P_smoothed(:,:,endk)=PHat;
-    for k = endk-1:-1:startk
+    output.abortedSmoothing = false;
+    for k = endk-1:-1:startk+1
         if dynModel.nonLinear
             %[dynModel.Phi dynModel.PhiEKF ] = computePhiEKF(dynModel,x_smoothed(:,k+1));
             %PhiForRTS = dynModel.Phi;
@@ -160,21 +172,28 @@ function output=SmoothSMBGandCGMData(t_in,y_in_fp,y_in_cgm,varargin)
         end
         C=(P_hat_f(:,:,k)*PhiForRTS')/P_bar_f(:,:,k+1);
         x_smoothed(:,k)=x_hat_f(:,k)+C*(x_smoothed(:,k+1)-x_bar_f(:,k+1));
-        if x_smoothed(end,k)>10
+        if x_smoothed(end,k)>maxk
             %disp(sprintf('Warning - k smoothed to %f in time step %d',x_smoothed(end,k),k))
-            x_smoothed(end,k)=10;
+            x_smoothed(end,k)=maxk;
         end
-        if x_smoothed(end,k)<0.01
+        if x_smoothed(end,k)<mink
             %disp(sprintf('Warning - k smoothed to %f in time step %d',x_smoothed(end,k),k))
-            x_smoothed(end,k)=0.01;
+            x_smoothed(end,k)=mink;
         end
         P_hat_s=P_hat_f(:,:,k)+C*(P_smoothed(:,:,k+1)-P_bar_f(:,:,k+1))*C';  
         [~,p] = chol(P_hat_s);
         if p~=0
-            disp(sprintf('Warning - smoothing aborted at t = %f due to non-posdef covmatrix',t_i(k)))
+            disp(sprintf('Warning - smoothing aborted at t = %f due to non-posdef covmatrix. time remaining to smooth: %f',t_i(k),t_i(k)-t_i(startk)))
+            P_hat_s
+            [l m] = eig(P_hat_s)
+            output.abortedSmoothing = true;
             break
         end
+        if ~issymmetric(P_hat_s)
+            P_hat_s = (P_hat_s+P_hat_s')/2; %Make symmetric
+        end
         P_smoothed(:,:,k) = P_hat_s;
+        lastSmoothK = k;
     end
 
     %Generate output structs
@@ -196,7 +215,7 @@ function output=SmoothSMBGandCGMData(t_in,y_in_fp,y_in_cgm,varargin)
     
     output.bias_smoothed(startk:endk) = x_smoothed(dynModel.Nin+2,startk:endk);
     output.lagk_smoothed(startk:endk) = x_smoothed(dynModel.Nin+3,startk:endk);
-    
+      
     output.bias_filtered(startk:endk) = x_hat_f(dynModel.Nin+2,startk:endk);
     output.lagk_filtered(startk:endk) = x_hat_f(dynModel.Nin+3,startk:endk);
     
@@ -210,6 +229,16 @@ function output=SmoothSMBGandCGMData(t_in,y_in_fp,y_in_cgm,varargin)
         output.lagk_smoothed_sd(k) = sqrt(P_smoothed(dynModel.Nin+3,dynModel.Nin+3,k));
         output.lagk_filtered_sd(k) = sqrt(P_hat_f(dynModel.Nin+3,dynModel.Nin+3,k));
     end 
+    
+    %The bias and lag may converge or not. Get some stats from the smoothed
+    %curve that could help to inform about which situation we are in
+    samples = lastSmoothK:endk;
+    output.bias_estimate = mean(output.bias_smoothed(samples));
+    output.bias_estimate_sd = std(output.bias_smoothed(samples));
+    
+    est_lag = 1./output.lagk_smoothed(samples);
+    output.lag_estimate = mean(est_lag);
+    output.lag_estimate_sd = std(est_lag);
 
     output.t_i = t_i;
     if isdatetime(startDateTime)
@@ -227,6 +256,7 @@ function output=SmoothSMBGandCGMData(t_in,y_in_fp,y_in_cgm,varargin)
 
      %debug plotting
     if parsedArgs.debugPlot
+        figure()
         subplot(3,1,1)
         plot(t_in,y_in_fp,'r.','DisplayName','Fingerpricks')
         hold on;
@@ -240,7 +270,7 @@ function output=SmoothSMBGandCGMData(t_in,y_in_fp,y_in_cgm,varargin)
         xlabel('Time [min]','FontWeight','bold','FontSize',12);
         ylabel('Glucose [mmol/L]','FontWeight','bold','FontSize',12);
         title('Smoothing CGM and SMBG')
-        legend('show')
+        %legend('show')
         subplot(3,1,2)
         plot(t_i,output.bias_smoothed,'r-','DisplayName','Bias - smoothed')
         hold on;
@@ -254,15 +284,15 @@ function output=SmoothSMBGandCGMData(t_in,y_in_fp,y_in_cgm,varargin)
         %legend('show')
         
         subplot(3,1,3)
-        plot(t_i,output.lagk_smoothed,'r-','DisplayName','Lag k - smoothed')
+        plot(t_i,1./output.lagk_smoothed,'r-','DisplayName','Lag k - smoothed')
         hold on;
-        plot(t_i,output.lagk_smoothed-2.5*output.lagk_smoothed_sd,'r--','DisplayName','Lag k variance')
-        plot(t_i,output.lagk_smoothed+2.5*output.lagk_smoothed_sd,'r--')
-        plot(t_i,output.lagk_filtered,'g-','DisplayName','Lag k - filtered')
-        plot(t_i,output.lagk_filtered-2.5*output.lagk_filtered_sd,'g--','DisplayName','Lag k variance')
-        plot(t_i,output.lagk_filtered+2.5*output.lagk_filtered_sd,'g--')
+        plot(t_i,1./(output.lagk_smoothed-2.5*output.lagk_smoothed_sd),'r--','DisplayName','Lag k variance')
+        plot(t_i,1./(output.lagk_smoothed+2.5*output.lagk_smoothed_sd),'r--')
+        plot(t_i,1./(output.lagk_filtered),'g-','DisplayName','Lag k - filtered')
+        plot(t_i,1./(output.lagk_filtered-2.5*output.lagk_filtered_sd),'g--','DisplayName','Lag k variance')
+        plot(t_i,1./(output.lagk_filtered+2.5*output.lagk_filtered_sd),'g--')
         ylabel('Lag','FontWeight','bold','FontSize',12);
-        ylim([0 1])
+        ylim([0 30])
         %legend('show')
         
         
@@ -281,8 +311,10 @@ end%function
 function parsedArgs = parseInputVarArgs(varargs)
     %Set defaults
     parsedArgs.tout = [];
-    parsedArgs.presmooth = true;
     parsedArgs.debugPlot = false;
+    parsedArgs.dynamicModel = 2;
+    parsedArgs.biasStartGuess = 2;
+    parsedArgs.outlierRemoval = 1;
     if mod(size(varargs,2),2)~=0
         error(['key/value arguments are not even:' num2str(size(varargs))])
     end
@@ -290,6 +322,8 @@ function parsedArgs = parseInputVarArgs(varargs)
         if isfield(parsedArgs,varargs{i})
             %disp(['Parsing argument:' varargs{i}])
             parsedArgs.(varargs{i})=varargs{i+1};
+        else
+            disp(['Parsed unknown argument:' varargs{i}])
         end
     end
 end
@@ -334,8 +368,17 @@ function dynModel=augmentDynamicModelBiasAndLag(dynModelIn)
     
     dynModel.Q = zeros(Ntot,Ntot);               % Process noise covariance matrix.
     dynModel.Q(1:dynModel.Nin,1:dynModel.Nin) = dynModelIn.Q;     
-    %No more noise terms added for the augmentation, this assumes bias and lag is
+    useParamProcessNoise=true;
+    if useParamProcessNoise
+        %Having some process noise on the parameters may help to not get
+        %stuck
+        dynModel.Q(dynModel.Nin+2,dynModel.Nin+2) = 1e-9;
+        dynModel.Q(dynModel.Nin+3,dynModel.Nin+3) = 1e-9; 
+    end
+    %if useParamProcessNoise==false, no more noise terms added for the augmentation, this assumes bias and lag is
     %modeled as an unknown constant,  and the G_isf is not affected by random noise directly.
+    
+    
     
     dynModel.H_both=[dynModelIn.H 0 0 0 ;
                      zeros(1,dynModel.Nin) 1 1 0];      % Measurement matrix for simultaneous fingerpricks and cgm measurements
@@ -353,7 +396,7 @@ function dynModel=augmentDynamicModelBiasAndLag(dynModelIn)
     end
     dynModel.initCov = dynModelIn.initCov;   % Initial covariance
     dynModel.initCov(dynModel.Nin+1,dynModel.Nin+1) = 0.25;   % Initial covariance for the G_isf state
-    dynModel.initCov(dynModel.Nin+2,dynModel.Nin+2) = 1;   % Initial covariance for the bias. Biases seem to range from -2 to 2 in my data. Initial guessing based on the data could 
+    dynModel.initCov(dynModel.Nin+2,dynModel.Nin+2) = 0.1;   % Initial covariance for the bias. Biases seem to range from -2 to 2 in my data, indicating a variance of 1 to about right. Initial guessing based on the data could justify reduction
     dynModel.initCov(dynModel.Nin+3,dynModel.Nin+3) = 0.01;    % Initial covariance for the inverse lag. Rougly based on an a priori assumed range of 1 to 30 minutes value for T_isf (=1/k_isf).
     dynModel.initCov(1,1) = 0.25; %Since we use init we assume low glucose 
     

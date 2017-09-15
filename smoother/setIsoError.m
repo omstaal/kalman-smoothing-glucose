@@ -4,8 +4,8 @@ function y_error = setIsoError(y)
     y_error = zeros(size(y));              % ISO 15197, set it based on the measured values
     for i = 1:length(y) % Make error bars (assumes fingerprick measurement
                         % errors according to ISO15197)
-        if y(i)>5.6
-            y_error(i) = 0.2*y(i);
+        if y(i)>5.55
+            y_error(i) = 0.15*y(i);
         else
             y_error(i) = 0.83;
         end
