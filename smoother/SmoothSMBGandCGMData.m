@@ -183,9 +183,8 @@ function output=SmoothSMBGandCGMData(t_in,y_in_fp,y_in_cgm,varargin)
         P_hat_s=P_hat_f(:,:,k)+C*(P_smoothed(:,:,k+1)-P_bar_f(:,:,k+1))*C';  
         [~,p] = chol(P_hat_s);
         if p~=0
-            disp(sprintf('Warning - smoothing aborted at t = %f due to non-posdef covmatrix. time remaining to smooth: %f',t_i(k),t_i(k)-t_i(startk)))
-            P_hat_s
             [l m] = eig(P_hat_s)
+            disp(sprintf('Warning - smoothing aborted at t = %f due to non-posdef covmatrix. time remaining to smooth: %f',t_i(k),t_i(k)-t_i(startk)))
             output.abortedSmoothing = true;
             break
         end
