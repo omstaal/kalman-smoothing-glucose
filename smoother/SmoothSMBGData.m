@@ -134,7 +134,7 @@ else
     error('Bad y_error argument supplied')    
 end
 
-output.outliers = false(size(y));
+outliers = false(size(y));
 doneFindingOutliers=false;
 
 while ~doneFindingOutliers
@@ -178,11 +178,11 @@ while ~doneFindingOutliers
             if parsedArgs.outlierRemoval == 2 
                 % Check the innovation
                 if(abs(dz)>parsedArgs.outlierSDlimit*sqrt(Pz))
-                    output.outliers(l)=true;
+                    outliers(l)=true;
                     disp(['Forward pass flagged measurement as outlier: t = ' num2str(t(l)) ' [min], y = ' num2str(y(l)) ' [mmol/L].'])
                 end
             end
-            if ~output.outliers(l)
+            if ~outliers(l)
                 %Measurement update
                 K=PBar*dynModel.H'/Pz;
                 xHat = xBar + K*dz;
@@ -231,8 +231,8 @@ while ~doneFindingOutliers
         y_s_mean  = closestValues(t,t_i,output.y_smoothed, startDateTime);
         y_s_sd  = closestValues(t,t_i,output.y_smoothed_sd, startDateTime);
         for i = 1:length(y)
-            if ~output.outliers(i) && abs(y(i)-y_s_mean(i))/y_s_sd(i)>parsedArgs.outlierSDlimit
-               output.outliers(i)=true;
+            if ~outliers(i) && abs(y(i)-y_s_mean(i))/y_s_sd(i)>parsedArgs.outlierSDlimit
+               outliers(i)=true;
                foundNewOutliers = true;
                disp(['Smoother flagged measurement ' num2str(i) ' as outlier: t = ' num2str(t(i)) ' [min], y = ' num2str(y(i)) ' [mmol/L].']) 
             end
@@ -240,7 +240,7 @@ while ~doneFindingOutliers
         if ~foundNewOutliers
             doneFindingOutliers = true;
         else
-            disp(['Smoother needs a second pass due to outliers detected. Total # outliers in input data:' num2str(sum(output.outliers))]) 
+            disp(['Smoother needs a second pass due to outliers detected. Total # outliers in input data:' num2str(sum(outliers))]) 
             
         end
     else
@@ -249,6 +249,7 @@ while ~doneFindingOutliers
 end %while not doneFindingOutliers
 %Smoothing done
 
+output.outliers = closestValues(t_in,t,outliers,startDateTime);
 
 output.y_filtered = nan(size(t_i));
 output.y_filtered_sd = nan(size(t_i));
@@ -328,8 +329,8 @@ if parsedArgs.plotInternalStates==1
             title(['Internal states model ' num2str(dynModel.id)])
             plot(t_plot,y,'r.','MarkerSize',15)
             legend('filtered','smoothed','measurements')
-            if sum(output.outliers)>0
-                plot(t_plot(output.outliers),y(output.outliers),'kx','MarkerSize',15)
+            if sum(outliers)>0
+                plot(t_plot(outliers),y(outliers),'kx','MarkerSize',15)
                 legend('filtered','smoothed','measurements','outliers')
             end
         else
