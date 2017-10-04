@@ -249,7 +249,7 @@ while ~doneFindingOutliers
 end %while not doneFindingOutliers
 %Smoothing done
 
-output.outliers = closestValues(t_in,t,outliers,startDateTime);
+output.outliers = closestValues(t_in,t,outliers,startDateTime)==1;
 
 output.y_filtered = nan(size(t_i));
 output.y_filtered_sd = nan(size(t_i));

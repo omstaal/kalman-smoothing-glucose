@@ -3,8 +3,8 @@ function dynModel=setDynamicModel(dynModelNo)
     dynModel.delta_t=1/6; %1 min/6 = 10 sec
     if(dynModelNo==1) %simple 2.order system where the rate of change of glucose dies out.
         dynModel.id=1;
-        a=-0.025;
-        qm1 = 0.01*dynModel.delta_t;
+        a=-0.05;
+        qm1 = 0.005*dynModel.delta_t;
         dynModel.F =[0 1;0 a];               % System matrix (continuous)
         dynModel.Q=[0 0;0 qm1];     % Process noise covariance matrix.
         dynModel.H=[1 0];                    % Measurement matrix.
@@ -13,9 +13,9 @@ function dynModel=setDynamicModel(dynModelNo)
         dynModel.Phi=expm(dynModel.F*dynModel.delta_t);        % Discrete state transition matrix
         dynModel.stateNames = {'Gp','dGp'};
         dynModel.strictlyPositiveStates = [true;false];
-    elseif (dynModelNo==2) %Lumped insulin/meal state that is central/remote
+    elseif (dynModelNo==2) %Lumped Tinsulin/meal state that is central/remote
         dynModel.id = 2;
-        Td = 10.000; % Time constant describing flow between central and remote compartments [min]
+        Td = 10.000; % Time constant [min] describing flow between central and remote compartments
         qm2 = 0.02*dynModel.delta_t;
         dynModel.F =[0 0 1;0 -1/Td 0;0 1/Td -1/Td]; % System matrix (continuous)
         dynModel.Q=[0 0 0;0 qm2 0;0 0 0]; % Process noise covariance matrix.
