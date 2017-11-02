@@ -123,7 +123,7 @@ t_i_valid = t_i(t_i_first:t_i_last);
 
 
 %Set up error to variance computation
-sdsInConfInterval = 2.5; %2 for 95% CI, 2.5 for 99% CI
+sdsInConfInterval = 2; %2 for 95% CI, 2.5 for 99% CI
 error2var = @(error) (error/sdsInConfInterval)^2; %Assumes normal distribution, and  error is given as a 99% confidence interval
 
 if length(parsedArgs.y_error)==length(y)   % Assume user supplied error estimates
