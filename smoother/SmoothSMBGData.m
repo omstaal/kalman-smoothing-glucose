@@ -12,7 +12,12 @@ function output=SmoothSMBGData(t_in,y_in,varargin)
 %       y_filtered : forward pass KF estimates, mean 
 %       y_filtered_sd : forward pass KF estimates, standard deviation
 %       t_i : interpolated time corresponding to the above vectors
-%       The above are all from first to last measurement with 1 sec resolution  
+%       The above are all from first to last measurement with 10 sec
+%       resolution
+%       If a tout argument has been supplied, the interpolated values at
+%       those times can be retrieved in the fields
+%       y_smoothed_at_tout and y_smoothed_sd_at_tout
+%       
 %
 %   
 %   The supported variable arguments are as follows:
@@ -22,7 +27,7 @@ function output=SmoothSMBGData(t_in,y_in,varargin)
 %   'plotResult' : 0, 1 or 2
 %   'plotInternalStates' : 0 or 1
 %   'dynamicModel' : 1,2 or 3
-%   't_out' : user-supplied vector of times that an estimate is wanted for, 
+%   'tout' : user-supplied vector of times that an estimate is wanted for, 
 %            either relative time or array of datetimes
 %   'unit'  : string decribing which glucose unit the y data is given in
 %
@@ -74,6 +79,8 @@ function output=SmoothSMBGData(t_in,y_in,varargin)
 %   If set to 'auto', a autodetection routine is run on y that guesses
 %   which unit is used based on the values found
 %   Default if not supplied is 'auto'
+% This code has been tested on Matlab R2016b. There are issues with using
+% this code on earlier versions.
 
 %TODO list for the future
 % 1) possibility to specify "no meal/insulin input" periods in the input
@@ -91,9 +98,12 @@ if strcmp(parsedArgs.unit,'mg_dL')==1 %This code assumes mmol/L, so convert to t
     parsedArgs.y_error = convertTo_mmol_L(parsedArgs.y_error);
 end
 
+
+
 %Handle time
 if isdatetime(t_in)
     %convert to relative time
+    t_in.TimeZone='';
     startDateTime = t_in(1);
     t_in=convertToRelativeTime(t_in, startDateTime);
 else
@@ -274,8 +284,8 @@ output.x_smoothed(:,t_i_first:t_i_last) = x_smoothed;
 if length(parsedArgs.tout)==0
     parsedArgs.tout = t_in;
 end
-output.y_smoothed_at_tout = closestValues(parsedArgs.tout,t_i,output.y_smoothed, startDateTime);
-output.y_smoothed_sd_at_tout = closestValues(parsedArgs.tout,t_i,output.y_smoothed_sd, startDateTime);
+output.y_smoothed_at_tout = interpolatedValues(parsedArgs.tout,t_i,output.y_smoothed, startDateTime);
+output.y_smoothed_sd_at_tout = interpolatedValues(parsedArgs.tout,t_i,output.y_smoothed_sd, startDateTime);
 
 %Add dynModel
 output.dynModel = dynModel;
