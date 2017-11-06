@@ -1,6 +1,7 @@
 function yout = interpolatedValues(tout, t, y, startdatetime)
     %INTERPOLATEDVALUES Helper function to find values at interpolated output times
     if isdatetime(tout)
+        tout.TimeZone='';
         tout = convertToRelativeTime(tout, startdatetime);
     end
     if sum(diff(tout)<0)>0
