@@ -48,9 +48,9 @@ function output=SmoothSMBGData(t_in,y_in,varargin)
 %   Default if not supplied is 0 (no outlier removal, only suppression)
 %
 %   outlierSDlimit is a double specifying how many standard deviations of the estimate to use
-%   use when removing outliers. 2.5 would be a conservative value while 1
+%   use when removing outliers. 2 would be a conservative value while 1
 %   would lead to quite aggressive outlier removal
-%   Default if not supplied is 2.5 
+%   Default if not supplied is 2 
 %
 %   If plotResult==1, a plot will be produced showing the result of the
 %   smoothing in a new figure. If plotResult==2, the estimates from the forward pass KF
@@ -317,9 +317,9 @@ if parsedArgs.plotResult>=1
         h4= plot(t_i_plot,output.y_filtered,'g','LineWidth',2);
         h5 = plot(t_i_plot,output.y_filtered+sdsInConfInterval*output.y_filtered_sd,'g--');
         plot(t_i_plot,output.y_filtered-sdsInConfInterval*output.y_filtered_sd,'g--')
-        legend([h1 h2 h3 h4 h5],{'Unfiltered glucose data','Smoothed estimate','\pm2.5 SD of smoothed estimate', 'Filtered estimate', '\pm2.5 SD of filtered estimate' })
+        legend([h1 h2 h3 h4 h5],{'Unfiltered glucose data','Smoothed estimate',['\pm' num2str(sdsInConfInterval) ' SD of smoothed estimate'], 'Filtered estimate', ['\pm' num2str(sdsInConfInterval) ' SD of filtered estimate'] })
     else
-        legend([h1 h2 h3],{'Unfiltered glucose data','Smoothed estimate','\pm2.5 SD of smoothed estimate' })
+        legend([h1 h2 h3],{'Unfiltered glucose data','Smoothed estimate',['\pm' num2str(sdsInConfInterval) ' SD of smoothed estimate'] })
     end
     title('Kalman smoothing','FontWeight','bold','FontSize',14)
     hold off

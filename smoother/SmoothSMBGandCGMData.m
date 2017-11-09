@@ -255,6 +255,7 @@ function output=SmoothSMBGandCGMData(t_in,y_in_fp,y_in_cgm,varargin)
 
      %debug plotting
     if parsedArgs.debugPlot
+        sdsInConfInterval=2;
         figure()
         subplot(3,1,1)
         plot(t_in,y_in_fp,'r.','DisplayName','Fingerpricks')
@@ -273,11 +274,11 @@ function output=SmoothSMBGandCGMData(t_in,y_in_fp,y_in_cgm,varargin)
         subplot(3,1,2)
         plot(t_i,output.bias_smoothed,'r-','DisplayName','Bias - smoothed')
         hold on;
-        plot(t_i,output.bias_smoothed-2.5*output.bias_smoothed_sd,'r--','DisplayName','Bias variance')
-        plot(t_i,output.bias_smoothed+2.5*output.bias_smoothed_sd,'r--')
+        plot(t_i,output.bias_smoothed-sdsInConfInterval*output.bias_smoothed_sd,'r--','DisplayName','Bias variance')
+        plot(t_i,output.bias_smoothed+sdsInConfInterval*output.bias_smoothed_sd,'r--')
         plot(t_i,output.bias_filtered,'g-','DisplayName','Bias - filtered')
-        plot(t_i,output.bias_filtered-2.5*output.bias_filtered_sd,'g--','DisplayName','Bias variance')
-        plot(t_i,output.bias_filtered+2.5*output.bias_filtered_sd,'g--')
+        plot(t_i,output.bias_filtered-sdsInConfInterval*output.bias_filtered_sd,'g--','DisplayName','Bias variance')
+        plot(t_i,output.bias_filtered+sdsInConfInterval*output.bias_filtered_sd,'g--')
         ylabel('Bias','FontWeight','bold','FontSize',12);
         ylim([-3 3])
         %legend('show')
@@ -285,11 +286,11 @@ function output=SmoothSMBGandCGMData(t_in,y_in_fp,y_in_cgm,varargin)
         subplot(3,1,3)
         plot(t_i,1./output.lagk_smoothed,'r-','DisplayName','Lag k - smoothed')
         hold on;
-        plot(t_i,1./(output.lagk_smoothed-2.5*output.lagk_smoothed_sd),'r--','DisplayName','Lag k variance')
-        plot(t_i,1./(output.lagk_smoothed+2.5*output.lagk_smoothed_sd),'r--')
+        plot(t_i,1./(output.lagk_smoothed-sdsInConfInterval*output.lagk_smoothed_sd),'r--','DisplayName','Lag k variance')
+        plot(t_i,1./(output.lagk_smoothed+sdsInConfInterval*output.lagk_smoothed_sd),'r--')
         plot(t_i,1./(output.lagk_filtered),'g-','DisplayName','Lag k - filtered')
-        plot(t_i,1./(output.lagk_filtered-2.5*output.lagk_filtered_sd),'g--','DisplayName','Lag k variance')
-        plot(t_i,1./(output.lagk_filtered+2.5*output.lagk_filtered_sd),'g--')
+        plot(t_i,1./(output.lagk_filtered-sdsInConfInterval*output.lagk_filtered_sd),'g--','DisplayName','Lag k variance')
+        plot(t_i,1./(output.lagk_filtered+sdsInConfInterval*output.lagk_filtered_sd),'g--')
         ylabel('Lag','FontWeight','bold','FontSize',12);
         ylim([0 30])
         %legend('show')
