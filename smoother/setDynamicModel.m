@@ -1,7 +1,17 @@
 %Helper method to set dynamic model
 function dynModel=setDynamicModel(dynModelNo)
     dynModel.delta_t=1/6; %1 min/6 = 10 sec
-    if(dynModelNo==1) %simple 2.order system where the rate of change of glucose dies out.
+    if(dynModelNo==0) %No dynamics
+        dynModel.id=0;
+        dynModel.F =[0];               % System matrix (continuous)
+        dynModel.Q=[0.005*dynModel.delta_t];     % Process noise covariance matrix.
+        dynModel.H=[1];                    % Measurement matrix.
+        dynModel.initCov = diag([0.25]);   % Initial covariance
+        %%% Discretization
+        dynModel.Phi=expm(dynModel.F*dynModel.delta_t);        % Discrete state transition matrix
+        dynModel.stateNames = {'Gp'};
+        dynModel.strictlyPositiveStates = [true];
+    elseif(dynModelNo==1) %simple 2.order system where the rate of change of glucose dies out.
         dynModel.id=1;
         a=-0.05;
         qm1 = 0.005*dynModel.delta_t;
@@ -34,7 +44,7 @@ function dynModel=setDynamicModel(dynModelNo)
         dynModel.Q=[0 0 0;0 qm3i 0;0 0 qm3m]; % Process noise covariance matrix.
         dynModel.H=[1 0 0];                        % Measurement matrix.
         dynModel.initCov = diag([10 1 1]);         % Initial covariance
-        dynModel.Phi=expm(dynModel.F*dynModel.delta_t);              % Discrete state transition matrix
+        dynModel.Phi=expm(dynModel.F*dynModel.delta_t); % Discrete state transition matrix
         dynModel.stateNames = {'Gp','I','M'};
         dynModel.strictlyPositiveStates = true(3,1);
     else

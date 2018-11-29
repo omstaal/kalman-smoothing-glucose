@@ -1,6 +1,8 @@
 
 %addpath('.')
-table = readtable('test.txt');
+opts = detectImportOptions('test.txt')
+opts = setvartype(opts,{'Glucose'},'double');
+table = readtable('test.txt',opts);
 y = table.Glucose;
 t = table.DateTime;
 smoother_result = SmoothSMBGData(t,y,'outlierRemoval',1,'dynamicModel',2);
